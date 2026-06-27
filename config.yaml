@@ -15,10 +15,14 @@ end: ""                            # 空 = 到今天(用系统时钟)
 # 自选股(占位,待给真实名单)。position_status: EMPTY/HOLDING/WATCHING;
 # 持有时填 cost_price 以算盈亏(规范第 8 章)。
 watchlist:
-  - { code: "600519", name: "贵州茅台" }
-  - { code: "300395", name: "菲利华" }
-  - { code: "688256", name: "寒武纪" }
-  - { code: "300308", name: "中际旭创" }
+  - { code: "601869", name: "长飞光纤" }
+  - { code: "600487", name: "亨通光电" }
+  - { code: "688146", name: "中船特气" }
+  - { code: "000636", name: "风华高科" }
+  - { code: "688308", name: "欧科亿" }
+  - { code: "603629", name: "利通电子" }
+  - { code: "301362", name: "民爆光电" }
+  - { code: "600396", name: "华电辽能" }
 
 periods:
   ma:   [5, 10, 20, 60, 120, 250]
