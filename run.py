@@ -10,9 +10,17 @@ import argparse
 import datetime as dt
 import sys
 
-from smon import sources
+from smon import indicators, score, signals, sources
 from smon.config import load_config
 from smon.logsetup import get_logger, setup_logger
+
+
+def _pad(s, width, right=False) -> str:
+    """按显示宽度补齐(CJK 字符占 2 列),让含中文的表格列对齐。"""
+    s = str(s)
+    w = sum(2 if ord(ch) > 0x2E7F else 1 for ch in s)
+    pad = " " * max(0, width - w)
+    return (pad + s) if right else (s + pad)
 
 
 def cmd_fetch(args) -> int:
@@ -40,6 +48,65 @@ def cmd_fetch(args) -> int:
     return 0
 
 
+def _analyze(code, cfg, end):
+    """取数→指标→打分→信号,返回单只票结果(数据不足返回 None)。"""
+    df = sources.fetch(code, cfg.start, end, source=cfg.data.source, cfg=cfg)
+    if df.empty or len(df) < 30:
+        return None
+    edf = indicators.enrich(df, cfg)
+    last = edf.iloc[-1]
+    st = cfg.stock(code)
+    return {
+        "code": str(code).split(".")[0].zfill(6),
+        "name": (st.name if st else ""),
+        "date": last["date"].date().isoformat(),
+        "close": round(float(last["close"]), 2),
+        "pct_chg": round(float(last["pct_chg"]), 2),
+        "score": score.score_stock(edf, cfg),
+        "sig": signals.evaluate(edf, cfg),
+    }
+
+
+def cmd_score(args) -> int:
+    cfg = load_config(args.config)
+    setup_logger(cfg.log_level, cfg.log_file)
+    log = get_logger("cli")
+    end = cfg.effective_end()
+    codes = [args.code] if args.code else cfg.codes()
+    rows = []
+    for c in codes:
+        r = _analyze(c, cfg, end)
+        if r:
+            rows.append(r)
+        else:
+            log.warning(f"{c}: 数据不足,跳过")
+    if not rows:
+        log.error("无可用结果"); return 1
+    rows.sort(key=lambda x: x["score"]["total"], reverse=True)
+
+    hdr = (_pad("代码", 8) + _pad("名称", 11) + _pad("现价", 9, True) + _pad("涨幅%", 8, True)
+           + _pad("综合分", 8, True) + " " + _pad("档", 6) + _pad("趋势", 6, True)
+           + _pad("量能", 6, True) + _pad("位置", 6, True) + "  信号")
+    print("\n" + hdr)
+    print("-" * 96)
+    for r in rows:
+        s, sig = r["score"], r["sig"]
+        sigtxt = []
+        if sig["buy_level"]:
+            sigtxt.append(f"{sig['buy_level']}买[" + "/".join(sig["buy_rules"]) + "]")
+        if sig["sell_level"]:
+            sigtxt.append(f"{sig['sell_level']}卖[" + "/".join(sig["sell_rules"]) + "]")
+        print(_pad(r["code"], 8) + _pad(r["name"], 11)
+              + _pad(f"{r['close']:.2f}", 9, True) + _pad(f"{r['pct_chg']:+.2f}", 8, True)
+              + _pad(f"{s['total']:+.1f}", 8, True) + " " + _pad(s["band"], 6)
+              + _pad(f"{s['trend']:+.0f}", 6, True) + _pad(f"{s['volume']:+.0f}", 6, True)
+              + _pad(f"{s['position']:+.0f}", 6, True) + "  "
+              + (" | ".join(sigtxt) if sigtxt else "—"))
+    print("\n打分档:强多>50 / 偏多20~50 / 中性±20 / 偏空-50~-20 / 强空<-50"
+          "(P1 筹码分未计→正负略压缩;大盘/止盈/确认在 P3+)")
+    return 0
+
+
 def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--config", default="config.yaml")
@@ -50,6 +117,9 @@ def main():
     f.add_argument("code")
     f.add_argument("--source", default="", help="local_db/tushare/akshare;空=用 config")
     f.set_defaults(func=cmd_fetch)
+    sc = sub.add_parser("score", parents=[common], help="对自选股打分排序(+基础信号)")
+    sc.add_argument("code", nargs="?", default="", help="指定单只;空=全部自选股")
+    sc.set_defaults(func=cmd_score)
     args = p.parse_args()
     sys.exit(args.func(args))
 
