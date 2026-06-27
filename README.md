@@ -37,8 +37,8 @@ A股自选股技术指标**盘后**监测系统(实现《规则规范 v2.0》)�
 
 ## 进度
 - [x] **P0 数据底座** —— sources(只读 local_db + topup 重锚) / config / 日志 / CLI
-- [ ] P1 指标 + 打分 + 基础 B/S 三级信号
-- [ ] P1.5 最小事件驱动回测器
+- [x] **P1 指标 + 打分 + 基础 B/S 三级信号** —— indicators / score / signals / `run.py score`
+- [x] **P1.5 事件驱动回测器** —— costs / backtest(无未来函数 / 持仓路径依赖 / 真实成本 / OOS) / `run.py backtest`
 - [ ] P2 量价细分 + ATR 吊灯止损 + 告警
 - [ ] P3 大盘/板块环境过滤 + 止盈/盈亏比
 - [ ] P4 筹码分布 + CAPITAL 信号

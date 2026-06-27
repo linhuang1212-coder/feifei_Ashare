@@ -57,6 +57,19 @@ alerts:
   min_push_level: "S2"
   channels: []                     # 待定: [feishu] / [email]
 
+# ===== P1.5 回测 =====
+backtest:
+  entry_levels: ["B2", "B3"]       # 达到这些买入级别才入场
+  exit_levels: ["S2", "S3"]        # 达到这些卖出级别就离场
+  fill: next_open                  # 次日开盘成交(决策用收盘≤T,成交在T+1,无未来函数)
+  oos_split: ""                    # 样本外切分日如 "2025-07-01";空=不切
+costs:                             # A股真实成本(实盘前按券商校准)
+  commission: 0.00025              # 佣金 双边(万2.5)
+  min_commission: 5.0              # 最低佣金(rate模型暂不计,留待加资金/手数)
+  stamp_tax: 0.0005                # 印花税 仅卖出(2023-08起 0.05%)
+  transfer_fee: 0.00001            # 过户费 双边
+  slippage: 0.0005                 # 滑点 单边
+
 output:
   db_path: data/feifei.db
   fig_dir: out

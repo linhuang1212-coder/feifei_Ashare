@@ -8,9 +8,10 @@
 """
 import argparse
 import datetime as dt
+import math
 import sys
 
-from smon import indicators, score, signals, sources
+from smon import backtest, indicators, score, signals, sources
 from smon.config import load_config
 from smon.logsetup import get_logger, setup_logger
 
@@ -107,6 +108,57 @@ def cmd_score(args) -> int:
     return 0
 
 
+def _pct(x):
+    return "—" if x is None else f"{x * 100:+.1f}%"
+
+
+def _num(x):
+    if x is None:
+        return "—"
+    return "∞" if x == math.inf else f"{x:.2f}"
+
+
+def _print_bt(tag, m):
+    if not m or m["n_trades"] == 0:
+        print(f"  {tag:<6}: 无交易"); return
+    bench = f" | 基准 {_pct(m['benchmark_ret'])}" if m.get("benchmark_ret") is not None else ""
+    print(f"  {tag:<6}: 交易 {m['n_trades']:>2} | 胜率 {m['win_rate'] * 100:>3.0f}% | "
+          f"盈亏比 {_num(m['payoff'])} | 盈利因子 {_num(m['profit_factor'])} | "
+          f"总收益 {_pct(m['total_ret'])} | 回撤 {_pct(m['max_drawdown'])} | "
+          f"均持 {m['avg_hold']:.0f}天{bench}")
+
+
+def cmd_backtest(args) -> int:
+    cfg = load_config(args.config)
+    setup_logger(cfg.log_level, cfg.log_file)
+    log = get_logger("cli")
+    end = cfg.effective_end()
+    codes = [args.code] if args.code else cfg.codes()
+    for c in codes:
+        df = sources.fetch(c, cfg.start, end, source=cfg.data.source, cfg=cfg)
+        if df.empty or len(df) < 150:
+            log.warning(f"{c}: 数据不足(<150),跳过"); continue
+        edf = indicators.enrich(df, cfg)
+        res = backtest.run(edf, cfg)
+        st = cfg.stock(c)
+        m, per = res["metrics"], res["metrics"]["period"]
+        bt = cfg.backtest or {}
+        print(f"\n=== {c} {st.name if st else ''} 回测 [{per[0]}..{per[1]}] "
+              f"入场{bt.get('entry_levels', ['B2', 'B3'])} 出场{bt.get('exit_levels', ['S2', 'S3'])} ===")
+        _print_bt("全样本", m)
+        if "metrics_is" in res:
+            _print_bt("样本内", res["metrics_is"])
+            _print_bt("样本外", res["metrics_oos"])
+        ts = res["trades"]
+        if ts and args.trades > 0:
+            print(f"  近 {min(args.trades, len(ts))} 笔:")
+            for t in ts[-args.trades:]:
+                flag = " [期末未平]" if t.get("open_position") else ""
+                print(f"    {t['entry_date']} → {t['exit_date']}  {t['ret'] * 100:+5.1f}%  "
+                      f"持{t['hold_days']:>2}天  入[{t['entry_reason']}] 出[{t['exit_reason']}]{flag}")
+    return 0
+
+
 def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--config", default="config.yaml")
@@ -120,6 +172,10 @@ def main():
     sc = sub.add_parser("score", parents=[common], help="对自选股打分排序(+基础信号)")
     sc.add_argument("code", nargs="?", default="", help="指定单只;空=全部自选股")
     sc.set_defaults(func=cmd_score)
+    bt = sub.add_parser("backtest", parents=[common], help="事件驱动回测信号策略")
+    bt.add_argument("code", nargs="?", default="", help="指定单只;空=全部自选股")
+    bt.add_argument("--trades", type=int, default=5, help="打印最近 N 笔交易(0=不打印)")
+    bt.set_defaults(func=cmd_backtest)
     args = p.parse_args()
     sys.exit(args.func(args))
 

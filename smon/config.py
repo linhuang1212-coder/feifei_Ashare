@@ -48,6 +48,8 @@ class AppConfig:
     confirmation: dict
     board_adjustment: dict
     alerts: dict
+    backtest: dict
+    costs: dict
     project_dir: str
     db_path: str
     fig_dir: str
@@ -114,6 +116,8 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         confirmation=dict(raw.get("confirmation", {})),
         board_adjustment=dict(raw.get("board_adjustment", {})),
         alerts=dict(raw.get("alerts", {})),
+        backtest=dict(raw.get("backtest", {})),
+        costs=dict(raw.get("costs", {})),
         project_dir=str(project_dir),
         db_path=_resolve(project_dir, out.get("db_path", "data/feifei.db")),
         fig_dir=_resolve(project_dir, out.get("fig_dir", "out")),
