@@ -1,0 +1,65 @@
+# feifei_Ashare 配置中心 —— 改票/改阈值/改源都在这里,代码不硬编码。
+# 所有阈值均为规范默认建议值,可调。
+
+data:
+  source: local_db                 # local_db(只读China_quant) | tushare | akshare
+  local_db_path: "C:\\Users\\Administrator\\China_quant\\data\\stock_data.db"
+  local_db_table: daily_kline_v2
+  topup: true                      # 本地库停在建库日(实测 2026-06-05),自动补到 end
+  topup_source: akshare            # 缺口补源: akshare(免token) | tushare
+  cache: true
+
+start: "2023-01-01"                # 至少留 250 交易日给 MA250 / 年内高低
+end: ""                            # 空 = 到今天(用系统时钟)
+
+# 自选股(占位,待给真实名单)。position_status: EMPTY/HOLDING/WATCHING;
+# 持有时填 cost_price 以算盈亏(规范第 8 章)。
+watchlist:
+  - { code: "600519", name: "贵州茅台" }
+  - { code: "300395", name: "菲利华" }
+  - { code: "688256", name: "寒武纪" }
+  - { code: "300308", name: "中际旭创" }
+
+periods:
+  ma:   [5, 10, 20, 60, 120, 250]
+  macd: [12, 26, 9]
+  kdj:  [9, 3, 3]
+  rsi:  [6, 12, 14]
+  atr:  14
+  boll: [20, 2]
+
+thresholds:
+  vol_surge: 2.0
+  vol_shrink: 0.7
+  turnover_active: 7.0
+  turnover_extreme: 25.0
+  atr_n: 3.0
+  chip_concentrated: 0.15
+  profit_ratio_high: 0.90
+
+scoring_weights: { trend: 0.35, volume: 0.25, position: 0.20, chip: 0.20 }
+
+# ===== v2.0 =====
+market_filter:
+  index_codes: ["000300.SH"]       # 本地无上证000001/创业板399006;先用沪深300当大盘代理(P3定)
+  risk_off_action: pause_buy
+take_profit:
+  min_risk_reward: 1.5             # 盈亏比低于此值的买入信号丢弃
+  trailing_drawdown_tech: 0.18     # 科技股移动止盈回撤
+  trailing_drawdown_stable: 0.12
+confirmation:
+  require_next_day_confirm: true   # 突破/跌破需次日确认
+  buy_signal_expire_days: 5
+  cooldown_days_after_stop: 3
+board_adjustment:
+  star_market_multiplier: 1.4      # 科创/创业板阈值上浮
+alerts:
+  min_push_level: "S2"
+  channels: []                     # 待定: [feishu] / [email]
+
+output:
+  db_path: data/feifei.db
+  fig_dir: out
+logging:
+  level: INFO
+  file: logs/feifei.log

@@ -1,0 +1,21 @@
+# 密钥(绝不入库)
+secrets.local.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 运行产物
+data/
+out/
+logs/
+*.db
+*.log
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
