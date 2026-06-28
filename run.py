@@ -85,7 +85,8 @@ def cmd_score(args) -> int:
     regime = reg["regime"]
     print(f"\n大盘环境:{regime}({market.REGIME_CN.get(regime,'')})  " + "  ".join(
         f"{c} {s['regime']}({s['pct_chg']:+.2f}%)" for c, s in reg.get("indices", {}).items()))
-    codes = [args.code] if args.code else cfg.codes()
+    one = getattr(args, "code", "") or ""
+    codes = [one] if one else cfg.codes()
     rows = []
     for c in codes:
         r = _analyze(c, cfg, end, regime=regime)
@@ -238,6 +239,22 @@ def cmd_update(args) -> int:
     return 0
 
 
+def cmd_daily(args) -> int:
+    """收盘后日常流水线:① 全市场批量补鲜 → ② 自选股打分+信号(持久化)。供定时任务调用。"""
+    cfg = load_config(args.config)
+    setup_logger(cfg.log_level, cfg.log_file)
+    log = get_logger("daily")
+    import datetime as _dt
+    log.info(f"===== 收盘后日常 {_dt.datetime.now():%Y-%m-%d %H:%M} =====")
+    try:
+        n = sources.update_cache(cfg)
+        log.info(f"① 补鲜:{n} 行")
+    except Exception as e:
+        log.error(f"① 补鲜失败(继续打分): {type(e).__name__}: {e}")
+    log.info("② 打分 + 信号(持久化)")
+    return cmd_score(args)
+
+
 def cmd_screen(args) -> int:
     """全市场两阶漏斗扫描:① 缓存秒级粗筛打分排序 → ② top-N topup 到今天精算。"""
     cfg = load_config(args.config)
@@ -324,6 +341,8 @@ def main():
     ca.set_defaults(func=cmd_cache)
     up = sub.add_parser("update", parents=[common], help="全市场批量补鲜(tushare 按日补到今天)")
     up.set_defaults(func=cmd_update)
+    dl = sub.add_parser("daily", parents=[common], help="收盘后日常流水线(补鲜+打分,供定时任务)")
+    dl.set_defaults(func=cmd_daily)
     sn = sub.add_parser("screen", parents=[common], help="全市场两阶漏斗扫描选股")
     sn.add_argument("--top", type=int, default=30, help="二阶精算的候选数(默认30)")
     sn.add_argument("--short", action="store_true", help="改取强空垫底(默认强多榜首)")
