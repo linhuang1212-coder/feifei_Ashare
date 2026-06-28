@@ -309,6 +309,8 @@ else:
                                ("RSI顶背离", "rsi_top_divergence"),
                                ("RSI底背离", "rsi_bottom_divergence")] if last.get(k)]
         st.write("- 背离:" + ("、".join(divs) if divs else "无"))
+        if last.get("daily_oscillator_failed"):
+            st.write("- ⚠ **钝化失效**:超买超卖此刻是噪音,已切趋势/周线主导")
         st.markdown("**周线背景(v2.1)**")
         st.write(f"- {WT_CN.get(last.get('weekly_trend'),'—')} | 周MA20 "
                  f"{last.get('w_ma20',float('nan')):.2f} | 周DIF {last.get('w_dif',float('nan')):.2f}")

@@ -224,7 +224,10 @@ def feature_status(edf: pd.DataFrame, chips=None) -> list:
             ("MACD死叉(当日)", bool(g("macd_dead_cross")), ""),
         ]),
         ("量能/换手", [
+            ("量比(/5日均量)", fnum("volume_ratio"), ""),
             ("放量(>2×5日均量)", bool(g("vol_surge")), ""),
+            ("巨量(>2.5×)", bool(g("vol_huge")), ""),
+            ("温和放量(1.5~2×)", bool(g("vol_mild_surge")), ""),
             ("缩量(<0.7×)", bool(g("vol_shrink")), ""),
             ("价涨量增", bool(g("price_up_vol_up")), ""),
             ("放量滞涨(顶部嫌疑)", bool(g("vol_stagnant")), ""),
@@ -244,6 +247,8 @@ def feature_status(edf: pd.DataFrame, chips=None) -> list:
             ("RSI14>50", bool(g("rsi_above_50")), f"RSI {fnum('rsi14','{:.0f}')}"),
             ("底背离(MACD/RSI)", bool(g("macd_bottom_divergence") or g("rsi_bottom_divergence")), ""),
             ("顶背离(MACD/RSI)", bool(g("macd_top_divergence") or g("rsi_top_divergence")), ""),
+            ("钝化失效(超买超卖失灵)", bool(g("daily_oscillator_failed")),
+             "已切趋势/周线主导" if g("daily_oscillator_failed") else ""),
         ]),
         ("止损/通道", [
             ("ATR吊灯止损位", fnum("chandelier_stop"), "已触发⚠" if g("atr_stop_triggered") else ""),

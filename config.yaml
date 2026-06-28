@@ -37,6 +37,8 @@ periods:
 
 thresholds:
   vol_surge: 2.0
+  vol_huge: 2.5                     # 巨量阈值(×5日均量)
+  vol_mild: 1.5                     # 温和放量阈值
   vol_shrink: 0.7
   turnover_active: 7.0
   turnover_extreme: 25.0

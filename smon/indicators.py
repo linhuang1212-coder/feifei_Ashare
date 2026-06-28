@@ -152,6 +152,9 @@ def enrich(df: pd.DataFrame, cfg, with_weekly: bool = True) -> pd.DataFrame:
     shrink = float(th.get("vol_shrink", 0.7))
     df["vol_surge"] = vol > df["vol_ma5"] * surge
     df["vol_shrink"] = vol < df["vol_ma5"] * shrink
+    df["volume_ratio"] = vol / df["vol_ma5"]                       # 量比(盘后简化)
+    df["vol_huge"] = vol > df["vol_ma5"] * float(th.get("vol_huge", 2.5))        # 巨量
+    df["vol_mild_surge"] = (vol > df["vol_ma5"] * float(th.get("vol_mild", 1.5))) & ~df["vol_surge"]  # 温和放量
     up_day = close > prevclose
     down_day = close < prevclose
     df["price_up_vol_up"] = up_day & (vol > vol.shift(1))
@@ -180,6 +183,28 @@ def enrich(df: pd.DataFrame, cfg, with_weekly: bool = True) -> pd.DataFrame:
     df["macd_bottom_divergence"] = _divergence(close, dif, 40, "bottom")
     df["rsi_top_divergence"] = _divergence(close, r14, 40, "top")
     df["rsi_bottom_divergence"] = _divergence(close, r14, 40, "bottom")
+
+    # ---------------- 日线钝化检测(v2.1 第7章 7.3) ----------------
+    bd = getattr(cfg, "blunt_detection", {}) or {}
+    bn = int(bd.get("kdj_blunt_days", 6))
+    jh, jl = float(bd.get("kdj_blunt_j_high", 90)), float(bd.get("kdj_blunt_j_low", 10))
+    j = df["kdj_j"]
+    crosses = (df["kdj_golden_cross"].astype(int) + df["kdj_dead_cross"].astype(int)).rolling(bn).sum()
+    whipsaw = crosses >= 2                                    # 期间反复假金叉死叉
+    j_stuck = (j.rolling(bn).min() > jh) | (j.rolling(bn).max() < jl)   # J 持续高/低位钝化
+    ob_newhigh = df["kdj_overbought"] & (close >= close.rolling(bn).max())  # 超买仍创新高=钝化
+    df["daily_kdj_blunt"] = (j_stuck & whipsaw) | ob_newhigh
+    rh, rl = float(bd.get("rsi_blunt_high", 80)), float(bd.get("rsi_blunt_low", 20))
+    if r14 is not None:
+        rsi_hi = (r14.rolling(bn).min() > rh) & (close >= close.rolling(bn).max())
+        rsi_lo = (r14.rolling(bn).max() < rl) & (close <= close.rolling(bn).min())
+        df["daily_rsi_blunt"] = rsi_hi | rsi_lo
+    else:
+        df["daily_rsi_blunt"] = False
+    if bd.get("enable", True):
+        df["daily_oscillator_failed"] = (df["daily_kdj_blunt"] | df["daily_rsi_blunt"]).fillna(False)
+    else:
+        df["daily_oscillator_failed"] = False
 
     # ---------------- 多周期:周线背景(v2.1,因果合成,常驻) ----------------
     if with_weekly:

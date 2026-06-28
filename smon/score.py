@@ -99,12 +99,15 @@ def score_stock(edf: pd.DataFrame, cfg, market_regime=None, chips=None) -> dict:
             chip += 15; cr.append("+15 下方筹码峰支撑")
         chip = _clamp(chip)
 
-    # ---- KDJ/RSI 微调 ±5 ----
+    # ---- KDJ/RSI 微调 ±5(钝化时置零,规范7.4:震荡指标失效则交还趋势)----
     adj, ar = 0.0, []
-    if g("rsi_above_50"):
-        adj += 5; ar.append("+5 RSI>50")
-    if (g("kdj_overbought") or g("rsi_overbought")) and not g("ma_bull_aligned"):
-        adj -= 5; ar.append("-5 超买(非多头)")
+    if g("daily_oscillator_failed"):
+        ar.append("钝化→震荡微调置零")
+    else:
+        if g("rsi_above_50"):
+            adj += 5; ar.append("+5 RSI>50")
+        if (g("kdj_overbought") or g("rsi_overbought")) and not g("ma_bull_aligned"):
+            adj -= 5; ar.append("-5 超买(非多头)")
 
     w = cfg.scoring_weights or {}
     total = (trend * w.get("trend", 0.35) + vol * w.get("volume", 0.25)
