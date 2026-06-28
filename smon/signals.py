@@ -14,8 +14,8 @@ def _tier(v) -> str:
     return str(v) if v is not None and pd.notna(v) else ""
 
 
-def evaluate(edf: pd.DataFrame, cfg, market_regime=None) -> dict:
-    """对 enriched df 评估当前买卖信号(可传入大盘 regime 做环境过滤)。"""
+def evaluate(edf: pd.DataFrame, cfg, market_regime=None, chips=None) -> dict:
+    """对 enriched df 评估当前买卖信号(可传入大盘 regime 与筹码 chips)。"""
     r = edf.iloc[-1]
     prev = edf.iloc[-2] if len(edf) > 1 else r
 
@@ -45,6 +45,10 @@ def evaluate(edf: pd.DataFrame, cfg, market_regime=None) -> dict:
         b1.append("RSI回升出超卖")
     if low_pos and tier in ("active", "high", "extreme") and g("vol_surge"):
         b1.append("低位放量活跃")
+    if chips and chips.get("peak_below") is not None:
+        pb = chips["peak_below"]
+        if pb > 0 and abs(close - pb) / pb < 0.03:           # 回踩下方筹码峰企稳(规范5.1)
+            b1.append("回踩下方筹码峰")
 
     # B2 建仓级:趋势+量能+位置 各 ≥1
     trend_ok = ((g("macd_golden_cross") and g("macd_above_zero"))
@@ -83,6 +87,8 @@ def evaluate(edf: pd.DataFrame, cfg, market_regime=None) -> dict:
         s1.append("放量滞涨")
     if g("turnover_spike") and high_pos:
         s1.append("高位换手骤升")
+    if chips and chips.get("high_peak_dispersing"):
+        s1.append("高位筹码发散")
     if high_pos and upsh > body * 2 and upsh > rng * 0.5:
         s1.append("高位长上影")
 
@@ -109,6 +115,8 @@ def evaluate(edf: pd.DataFrame, cfg, market_regime=None) -> dict:
         s3.append("跌破近60日前低(结构破坏)")
     if g("vol_surge") and broke_ll and close < prevclose and upsh > body * 2:
         s3.append("天量长上影+破生命线")
+    if chips and chips.get("high_peak_dispersing") and broke_ll:
+        s3.append("筹码派发+破生命线")
 
     # ===== v2.1 周线背景 + 钝化趋势主导(P3.5,规范第7章 7.4) =====
     mp = getattr(cfg, "multi_period", {}) or {}
@@ -161,20 +169,31 @@ def evaluate(edf: pd.DataFrame, cfg, market_regime=None) -> dict:
         buy_level = None                                  # 大盘走弱暂停买入
         sell_level = {"S1": "S2", "S2": "S3", "S3": "S3"}.get(sell_level, sell_level)
 
+    # ===== 主力/筹码动向(规范 5.4,中性提示,无主力资金数据→用筹码+量价近似)=====
+    capital = None
+    if chips:
+        if chips.get("low_single_peak") and (g("vol_shrink") or g("vol_shrink_pullback")):
+            capital = "疑似建仓"
+        elif chips.get("high_peak_dispersing") and g("vol_stagnant"):
+            capital = "疑似派发"
+        elif g("vol_shrink_pullback") and pd.notna(ll) and abs(close - ll) / ll < 0.05:
+            capital = "疑似洗盘"
+
     return {
         "buy_level": buy_level, "buy_rules": buy_rules,
         "sell_level": sell_level, "sell_rules": sell_rules,
         "pos_pctile": round(pp, 1), "risk_reward": rr,
         "weekly_trend": wt, "decision_mode": decision_mode,
-        "market_regime": market_regime,
+        "market_regime": market_regime, "capital": capital,
     }
 
 
 # ============================================================ 指标达标清单
-def feature_status(edf: pd.DataFrame) -> list:
+def feature_status(edf: pd.DataFrame, chips=None) -> list:
     """每只股的指标达标情况(规范 0.1:输出哪些条件满足),供人逐项核对。
 
     返回 [(分组名, [(项, 状态, 备注)])];状态为 bool(✓/✗)或字符串值。
+    传入 chips 则附加筹码组。
     """
     r = edf.iloc[-1]
 
@@ -193,7 +212,7 @@ def feature_status(edf: pd.DataFrame) -> list:
 
     pp = g("pos_pctile")
     wt_cn = {"WEEKLY_BULL": "多头", "WEEKLY_BEAR": "空头", "WEEKLY_NEUTRAL": "中性"}
-    return [
+    groups = [
         ("趋势", [
             ("多头排列(MA5>10>20>60)", bool(g("ma_bull_aligned")), ""),
             ("空头排列", bool(g("ma_bear_aligned")), ""),
@@ -236,3 +255,21 @@ def feature_status(edf: pd.DataFrame) -> list:
             ("周线趋势", wt_cn.get(g("weekly_trend"), "—"), f"周MA20 {fnum('w_ma20')}"),
         ]),
     ]
+    if chips:
+        def cf(v):
+            return f"{v:.2f}" if isinstance(v, (int, float)) else "—"
+        pr = chips.get("profit_ratio")
+        groups.append(("筹码(估算)", [
+            ("获利盘比例", (f"{pr * 100:.0f}%" if pr is not None else "—"),
+             "获利盘>90%高位警惕" if chips.get("profit_ratio_high") else
+             ("普遍套牢(底部特征)" if chips.get("profit_ratio_low") else "")),
+            ("平均成本(cost50)", cf(chips.get("cost_50")), ""),
+            ("90集中度", (f"{chips['concentration']:.2f}" if chips.get("concentration") is not None else "—"),
+             "高度集中" if chips.get("concentrated") else ("发散" if chips.get("dispersed") else "")),
+            ("低位单峰密集", bool(chips.get("low_single_peak")), ""),
+            ("筹码上移(健康)", bool(chips.get("peak_upward_migration")), ""),
+            ("高位筹码发散(派发嫌疑)", bool(chips.get("high_peak_dispersing")), ""),
+            ("下方筹码峰(支撑)", cf(chips.get("peak_below")), ""),
+            ("上方筹码峰(压力)", cf(chips.get("peak_above")), ""),
+        ]))
+    return groups

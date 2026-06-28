@@ -89,6 +89,11 @@ blunt_detection:                   # 日线钝化检测(暂存配置,P3.5 第二
   rsi_blunt_high: 80
   rsi_blunt_low: 20
 
+# ===== P4 筹码分布 =====
+chips:
+  window: 120                      # 估算回溯交易日(规范建议120-250)
+  bins: 200                        # 价格网格档数
+
 output:
   db_path: data/feifei.db
   fig_dir: out

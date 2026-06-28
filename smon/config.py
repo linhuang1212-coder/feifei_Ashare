@@ -52,6 +52,7 @@ class AppConfig:
     costs: dict
     multi_period: dict
     blunt_detection: dict
+    chips: dict
     project_dir: str
     db_path: str
     fig_dir: str
@@ -122,6 +123,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         costs=dict(raw.get("costs", {})),
         multi_period=dict(raw.get("multi_period", {})),
         blunt_detection=dict(raw.get("blunt_detection", {})),
+        chips=dict(raw.get("chips", {})),
         project_dir=str(project_dir),
         db_path=_resolve(project_dir, out.get("db_path", "data/feifei.db")),
         fig_dir=_resolve(project_dir, out.get("fig_dir", "out")),

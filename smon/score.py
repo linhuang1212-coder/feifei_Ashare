@@ -23,11 +23,12 @@ def _band(total):
     return "强空"
 
 
-def score_stock(edf: pd.DataFrame, cfg, market_regime=None) -> dict:
+def score_stock(edf: pd.DataFrame, cfg, market_regime=None, chips=None) -> dict:
     """对 enriched df 的最新一行打分。返回 total/band/四桶分/理由。
 
     market_regime 传入时做整体修正(规范 10.2 v2.0):NEUTRAL 正分×0.8;
     RISK_OFF 正分×0.5、负分×1.2(放大风险)。
+    chips 传入时计入筹码桶(否则筹码=0,正负略压缩)。
     """
     r = edf.iloc[-1]
 
@@ -82,8 +83,21 @@ def score_stock(edf: pd.DataFrame, cfg, market_regime=None) -> dict:
         pr.append(f"{pos:+.0f} 位置分位{float(pp):.0f}%")
     pos = _clamp(pos)
 
-    # ---- 筹码分(P4) ----
-    chip = 0.0
+    # ---- 筹码分(P4)----
+    chip, cr = 0.0, []
+    if chips:
+        hi = bool(pd.notna(pp) and float(pp) > 80)
+        if chips.get("low_single_peak"):
+            chip += 30; cr.append("+30 低位单峰密集")
+        if chips.get("peak_upward_migration"):
+            chip += 20; cr.append("+20 筹码上移")
+        if chips.get("profit_ratio_high") and hi:
+            chip -= 25; cr.append("-25 获利盘>90%且高位")
+        if chips.get("high_peak_dispersing"):
+            chip -= 30; cr.append("-30 高位筹码发散")
+        if chips.get("peak_below") is not None:
+            chip += 15; cr.append("+15 下方筹码峰支撑")
+        chip = _clamp(chip)
 
     # ---- KDJ/RSI 微调 ±5 ----
     adj, ar = 0.0, []
@@ -106,7 +120,7 @@ def score_stock(edf: pd.DataFrame, cfg, market_regime=None) -> dict:
     return {
         "total": round(total, 1), "band": _band(total),
         "trend": round(trend, 1), "volume": round(vol, 1),
-        "position": round(pos, 1), "chip": chip, "adj": adj,
+        "position": round(pos, 1), "chip": round(chip, 1), "adj": adj,
         "market_regime": market_regime,
-        "reasons": {"trend": tr, "volume": vr, "position": pr, "adj": ar},
+        "reasons": {"trend": tr, "volume": vr, "position": pr, "chip": cr, "adj": ar},
     }

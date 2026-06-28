@@ -12,6 +12,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from smon import chips as chipsmod
 from smon import indicators, market, sources
 from smon import score as scoremod
 from smon import signals as sigmod
@@ -42,19 +43,26 @@ def get_regime(end):
     return market.get_regime(get_cfg(), end)
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_chips(code, end):
+    edf = get_edf(code, end)
+    return chipsmod.compute(edf, get_cfg()) if edf is not None else None
+
+
 def analyze(code, cfg, end, regime=None):
     edf = get_edf(code, end)
     if edf is None:
         return None
     last = edf.iloc[-1]
     s = cfg.stock(code)
+    ch = get_chips(code, end)
     return {
         "code": str(code).split(".")[0].zfill(6),
         "name": s.name if s else "",
-        "edf": edf, "last": last,
+        "edf": edf, "last": last, "chips": ch,
         "close": float(last["close"]), "pct": float(last["pct_chg"]),
-        "score": scoremod.score_stock(edf, cfg, market_regime=regime),
-        "sig": sigmod.evaluate(edf, cfg, market_regime=regime),
+        "score": scoremod.score_stock(edf, cfg, market_regime=regime, chips=ch),
+        "sig": sigmod.evaluate(edf, cfg, market_regime=regime, chips=ch),
     }
 
 
@@ -140,7 +148,7 @@ if view == "📊 总览":
                     "120日分位": "{:.0f}"}))
     st.dataframe(sty, width="stretch", hide_index=True, height=38 * (len(rows) + 1))
     st.caption("打分档:强多>50 / 偏多20~50 / 中性±20 / 偏空-50~-20 / 强空<-50。"
-               "筹码分 P4 未计、大盘环境 P3 未接,故为信号上下文非买卖指令。")
+               "筹码桶(估算)+ 大盘环境 + 盈亏比闸门已接;持仓/确认 P5。仅为信号上下文,非买卖指令。")
 
 # ============================================================ 单股详情
 else:
@@ -233,9 +241,31 @@ else:
                       xaxis_rangeslider_visible=False, legend=dict(orientation="h"))
     st.plotly_chart(fig, width="stretch")
 
+    # 筹码分布(P4,估算)
+    ch = r["chips"]
+    if ch:
+        st.markdown("**🎯 筹码分布(估算,仅供参考)**")
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("获利盘比例", f"{ch['profit_ratio'] * 100:.0f}%")
+        k2.metric("平均成本", f"{ch['cost_50']:.2f}")
+        k3.metric("90集中度", f"{ch['concentration']:.2f}" if ch["concentration"] is not None else "—",
+                  "高度集中" if ch["concentrated"] else ("发散" if ch["dispersed"] else "中等"))
+        cap = sg.get("capital")
+        k4.metric("主力动向(估)", cap if cap else "—")
+        cf = go.Figure()
+        cf.add_trace(go.Bar(y=ch["centers"], x=ch["weights"], orientation="h",
+                            marker_color="#c9a227", name="筹码"))
+        cf.add_hline(y=r["close"], line=dict(color=UP, width=1.5),
+                     annotation_text="现价", annotation_position="right")
+        cf.add_hline(y=ch["cost_50"], line=dict(color="#4a90d9", width=1, dash="dot"),
+                     annotation_text="平均成本", annotation_position="right")
+        cf.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
+                         xaxis_title="持仓占比", yaxis_title="价位", showlegend=False)
+        st.plotly_chart(cf, width="stretch")
+
     # 指标达标清单(规范 0.1:输出哪些条件满足,供逐项核对)
     st.markdown("**📋 指标达标清单**(✅满足 / ⬜未满足 / ▸数值)")
-    groups = sigmod.feature_status(edf)
+    groups = sigmod.feature_status(edf, chips=r["chips"])
     cols = st.columns(3)
     for idx, (gname, items) in enumerate(groups):
         with cols[idx % 3]:
@@ -258,4 +288,6 @@ else:
         st.write(f"**趋势 {s['trend']:+.0f}**:" + "; ".join(reasons["trend"]) if reasons["trend"] else "趋势:—")
         st.write(f"**量能 {s['volume']:+.0f}**:" + "; ".join(reasons["volume"]) if reasons["volume"] else "量能:—")
         st.write(f"**位置 {s['position']:+.0f}**:" + "; ".join(reasons["position"]) if reasons["position"] else "位置:—")
-        st.write(f"**筹码** {s['chip']:+.0f}(P4 未实现) · **微调** {s['adj']:+.0f}")
+        st.write((f"**筹码 {s['chip']:+.0f}**:" + "; ".join(reasons.get("chip", [])))
+                 if reasons.get("chip") else f"筹码:{s['chip']:+.0f}")
+        st.write(f"**微调** {s['adj']:+.0f}")

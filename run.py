@@ -11,7 +11,7 @@ import datetime as dt
 import math
 import sys
 
-from smon import backtest, indicators, market, score, signals, sources
+from smon import backtest, chips, indicators, market, score, signals, sources
 from smon.config import load_config
 from smon.logsetup import get_logger, setup_logger
 
@@ -55,6 +55,7 @@ def _analyze(code, cfg, end, regime=None):
     if df.empty or len(df) < 30:
         return None
     edf = indicators.enrich(df, cfg)
+    ch = chips.compute(edf, cfg)
     last = edf.iloc[-1]
     st = cfg.stock(code)
     return {
@@ -63,8 +64,8 @@ def _analyze(code, cfg, end, regime=None):
         "date": last["date"].date().isoformat(),
         "close": round(float(last["close"]), 2),
         "pct_chg": round(float(last["pct_chg"]), 2),
-        "score": score.score_stock(edf, cfg, market_regime=regime),
-        "sig": signals.evaluate(edf, cfg, market_regime=regime),
+        "score": score.score_stock(edf, cfg, market_regime=regime, chips=ch),
+        "sig": signals.evaluate(edf, cfg, market_regime=regime, chips=ch),
     }
 
 
@@ -110,7 +111,7 @@ def cmd_score(args) -> int:
               + _pad(f"{s['position']:+.0f}", 6, True) + "  "
               + (" | ".join(sigtxt) if sigtxt else "—"))
     print("\n打分档:强多>50 / 偏多20~50 / 中性±20 / 偏空-50~-20 / 强空<-50"
-          "(筹码分 P4 未计;大盘环境已修正、盈亏比闸门已接;持仓/信号确认在 P5)")
+          "(筹码桶已接[估算]、大盘环境已修正、盈亏比闸门已接;持仓/信号确认在 P5)")
     return 0
 
 
@@ -177,13 +178,14 @@ def cmd_check(args) -> int:
         if df.empty or len(df) < 30:
             log.warning(f"{c}: 数据不足,跳过"); continue
         edf = indicators.enrich(df, cfg)
+        ch = chips.compute(edf, cfg)
         last = edf.iloc[-1]
         st = cfg.stock(c)
         print("\n" + "=" * 60)
         print(f"{c} {st.name if st else ''}  现价 {float(last['close']):.2f}  "
               f"{float(last['pct_chg']):+.2f}%  ({last['date'].date()})")
         print("=" * 60)
-        for gname, items in signals.feature_status(edf):
+        for gname, items in signals.feature_status(edf, chips=ch):
             print(f"【{gname}】")
             for name, status, note in items:
                 if isinstance(status, bool):
