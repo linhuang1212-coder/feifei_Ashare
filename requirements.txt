@@ -6,7 +6,8 @@ loguru
 akshare        # 免 token 的缺口补源 / 回退源
 tushare        # 可选:首选缺口补源,需 token(secrets.local.yaml 或 env TUSHARE_TOKEN)
 
+streamlit      # 仪表盘
+plotly         # K线/指标图
+
 # 后续阶段(用到再装):
-# pandas-ta     # P1 指标 MA/MACD/KDJ/RSI/ATR/BOLL
-# streamlit     # 仪表盘
-# plotly        # 筹码图/K线
+# pandas-ta     # (本项目指标为手写,未用)

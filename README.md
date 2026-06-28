@@ -39,11 +39,19 @@ A股自选股技术指标**盘后**监测系统(实现《规则规范 v2.0》)�
 - [x] **P0 数据底座** —— sources(只读 local_db + topup 重锚) / config / 日志 / CLI
 - [x] **P1 指标 + 打分 + 基础 B/S 三级信号** —— indicators / score / signals / `run.py score`
 - [x] **P1.5 事件驱动回测器** —— costs / backtest(无未来函数 / 持仓路径依赖 / 真实成本 / OOS) / `run.py backtest`
-- [ ] P2 量价细分 + ATR 吊灯止损 + 告警
+- [x] **P3.5 周线背景(v2.1)** —— weekly.py 因果合成;v2.1 门控经 A/B 中性票池回测**证伪**→默认关闭,周线背景仅保留显示
+- [x] **仪表盘(Streamlit)** —— app.py 总览(打分/信号/周线)+ 单股详情卡(均线/MACD/KDJ/换手/位置/K线图)
+- [ ] P2 量价细分 + ATR 吊灯止损精化 + 飞书告警
 - [ ] P3 大盘/板块环境过滤 + 止盈/盈亏比
 - [ ] P4 筹码分布 + CAPITAL 信号
 - [ ] P5 持仓感知 + 信号确认状态机
 - [ ] P6 阈值校准 + 每日定时任务
+
+> 定位:**监测/提醒**(给人决策),非自动交易。回测=信号质量体检,不以跑赢大盘为目标。
+
+## 运行仪表盘
+
+    "%PY%" -m streamlit run app.py        # 浏览器开 http://localhost:8501
 
 ## 模块(规划)
 `smon/`:`config` 配置中心 · `logsetup` 日志 · `sources` 数据源(✅) · `indicators` 指标 ·
