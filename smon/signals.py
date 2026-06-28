@@ -40,9 +40,12 @@ def evaluate(edf: pd.DataFrame, cfg, market_regime=None, chips=None, sector=None
         b1.append("超卖区KDJ金叉")
     if g("rsi_bottom_divergence"):
         b1.append("RSI底背离")
-    if (pd.notna(prev.get("rsi14")) and pd.notna(g("rsi14"))
-            and prev["rsi14"] < 30 <= g("rsi14")):
+    rsi_bounce = (pd.notna(prev.get("rsi14")) and pd.notna(g("rsi14"))
+                  and prev["rsi14"] < 30 <= g("rsi14"))
+    if rsi_bounce:
         b1.append("RSI回升出超卖")
+    if g("rsi_oversold"):                       # RSI超卖(体检 fwd10+2.3% 最强反弹信号)
+        b1.append("RSI超卖")
     if low_pos and tier in ("active", "high", "extreme") and g("vol_surge"):
         b1.append("低位放量活跃")
     if chips and chips.get("peak_below") is not None:
@@ -50,12 +53,13 @@ def evaluate(edf: pd.DataFrame, cfg, market_regime=None, chips=None, sector=None
         if pb > 0 and abs(close - pb) / pb < 0.03:           # 回踩下方筹码峰企稳(规范5.1)
             b1.append("回踩下方筹码峰")
 
-    # B2 建仓级:趋势+量能+位置 各 ≥1
+    # B2 建仓级:(趋势转好 或 低位超卖反弹) + 量能 + 位置 各 ≥1
     trend_ok = ((g("macd_golden_cross") and g("macd_above_zero"))
                 or g("ma_bull_aligned") or (pd.notna(ll) and close > ll))
+    reversal_ok = low_pos and (rsi_bounce or (g("rsi_oversold") and close > prevclose))  # 低位超卖企稳
     vol_ok = g("price_up_vol_up") or (g("vol_surge") and close > prevclose)
     pos_ok = low_pos
-    b2 = trend_ok and vol_ok and pos_ok
+    b2 = (trend_ok or reversal_ok) and vol_ok and pos_ok
 
     # B3 强烈级:多头排列 + 放量突破
     prior_high20 = edf["high"].iloc[-21:-1].max() if len(edf) > 21 else r["high"]
@@ -68,7 +72,8 @@ def evaluate(edf: pd.DataFrame, cfg, market_regime=None, chips=None, sector=None
         buy_rules = ["多头排列", "放量突破" + ("布林上轨" if g("boll_break_upper") else "近20日高")]
     elif b2:
         buy_level = "B2"
-        buy_rules = [x for x, ok in [("趋势转好", trend_ok), ("量能配合", vol_ok),
+        why = "趋势转好" if trend_ok else "低位超卖反弹"
+        buy_rules = [x for x, ok in [(why, trend_ok or reversal_ok), ("量能配合", vol_ok),
                                      ("位置不高", pos_ok)] if ok]
     elif len(b1) >= 2:
         buy_level = "B1"
