@@ -64,13 +64,37 @@ def analyze(code, cfg, end, regime=None):
         sig["buy_level"], sig["buy_rules"] = None, []
     return {
         "code": str(code).split(".")[0].zfill(6),
-        "name": s.name if s else "",
+        "name": (s.name if (s and s.name) else sources.name_of(code, cfg)),
         "edf": edf, "last": last, "chips": ch,
         "close": float(last["close"]), "pct": float(last["pct_chg"]),
         "score": scoremod.score_stock(edf, cfg, market_regime=regime, chips=ch),
         "sig": sig, "confirm": confirm, "cooldown": cooldown,
         "pos": posmod.annotate(s, edf, sig, cfg),
     }
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_universe_labels(cache_max):
+    """全市场代码+名称(供单股详情下拉,按 cache_max 失效)。"""
+    cfg = get_cfg()
+    return [(c, f"{c} {sources.name_of(c, cfg)}") for c in sources.list_universe(cfg)]
+
+
+def run_market_screen(cfg, end, regime, topn, short):
+    """全市场两阶漏斗扫描(供仪表盘"全市场排行")。返回 top-N 结果。"""
+    rows = []
+    for code in sources.list_universe(cfg):
+        df = sources._fetch_cache(code, cfg.start, end, cfg)
+        if df is None or df.empty or len(df) < 60:
+            continue
+        edf = indicators.enrich(df, cfg, with_weekly=False)
+        sc = scoremod.score_stock(edf, cfg, market_regime=regime)
+        rows.append((code, sc["total"]))
+    rows.sort(key=lambda x: x[1], reverse=not short)
+    cand = [c for c, _ in rows[: max(topn * 2, 40)]]
+    full = [x for x in (analyze(c, cfg, end, regime=regime) for c in cand) if x]
+    full.sort(key=lambda x: x["score"]["total"], reverse=not short)
+    return full[:topn]
 
 
 def sig_text(sg):
@@ -107,45 +131,41 @@ def pos_label(pos):
 cfg = get_cfg()
 end = cfg.effective_end()
 codes = cfg.codes()
+cache_max = sources.cache_max_date(cfg)
 st.sidebar.title("feifei_Ashare 盯盘")
-st.sidebar.caption(f"数据截至 {end} · 自选股 {len(codes)} 只")
-view = st.sidebar.radio("视图", ["📊 总览", "🔍 单股详情"])
+st.sidebar.caption(f"数据截至 {cache_max} · 自选 {len(codes)} 只 · 全市场 {len(get_universe_labels(cache_max))} 只")
+view = st.sidebar.radio("视图", ["📊 自选总览", "🔍 单股详情", "🔥 全市场排行"])
 if st.sidebar.button("🔄 刷新数据(清缓存)"):
-    get_edf.clear()
+    st.cache_data.clear()
     st.rerun()
 st.sidebar.info("定位:监测/提醒,给人决策用,非自动交易。所有信号有滞后与失效可能,风险自负。")
 
-# 大盘环境(全局,先算)
+# 大盘环境(全局)+ 顶部常驻横幅
 reg = get_regime(end)
 regime = reg["regime"]
-
-# 预加载全部(带进度)
-results = []
-prog = st.sidebar.progress(0.0, text="加载中…")
-for i, c in enumerate(codes):
-    r = analyze(c, cfg, end, regime=regime)
-    if r:
-        results.append(r)
-    prog.progress((i + 1) / len(codes), text=f"加载 {c}")
-prog.empty()
-
-# 环境区横幅(规范 6.4:常驻顶部)
 reg_color = {"RISK_ON": UP, "NEUTRAL": FLAT, "RISK_OFF": DOWN}.get(regime, FLAT)
 idx_txt = " · ".join(f"{c} {market.REGIME_CN.get(s['regime'],'')}({s['pct_chg']:+.2f}%)"
                      for c, s in reg.get("indices", {}).items())
 st.markdown(
     f"#### 🌐 大盘环境:<span style='color:{reg_color}'>**{regime} "
-    f"{market.REGIME_CN.get(regime,'')}**</span>　<small style='color:#888'>{idx_txt}</small>",
-    unsafe_allow_html=True)
+    f"{market.REGIME_CN.get(regime,'')}**</span>　<small style='color:#888'>{idx_txt} · "
+    f"数据截至 {cache_max}</small>", unsafe_allow_html=True)
 if regime == "RISK_OFF":
     st.error("大盘走弱:买入信号已暂停,卖出信号升级。")
 elif regime == "NEUTRAL":
     st.caption("大盘中性:买入信号降一级,谨慎。")
 
-# ============================================================ 总览
-if view == "📊 总览":
-    st.subheader("📊 自选股总览(按综合分排序)")
-    st.caption("已含:大盘环境(顶部)+ 周线背景 + 持仓盈亏。持仓列据 config.yaml 的持仓字段。")
+# ============================================================ 自选总览
+if view == "📊 自选总览":
+    st.subheader(f"📊 自选股总览({len(codes)} 只,按综合分排序)")
+    results = []
+    prog = st.progress(0.0, text="加载自选股…")
+    for i, c in enumerate(codes):
+        rr = analyze(c, cfg, end, regime=regime)
+        if rr:
+            results.append(rr)
+        prog.progress((i + 1) / len(codes), text=f"加载 {c}")
+    prog.empty()
     rows = []
     for r in sorted(results, key=lambda x: x["score"]["total"], reverse=True):
         s, sg = r["score"], r["sig"]
@@ -155,8 +175,7 @@ if view == "📊 总览":
             "趋势": s["trend"], "量能": s["volume"], "位置": s["position"],
             "周线背景": WT_CN.get(r["last"].get("weekly_trend"), "—"),
             "120日分位": round(r["sig"]["pos_pctile"], 0),
-            "持仓": pos_label(r.get("pos")),
-            "信号": sig_text(sg),
+            "持仓": pos_label(r.get("pos")), "信号": sig_text(sg),
         })
     df = pd.DataFrame(rows)
     sty = (df.style
@@ -165,15 +184,46 @@ if view == "📊 总览":
                     "趋势": "{:+.0f}", "量能": "{:+.0f}", "位置": "{:+.0f}",
                     "120日分位": "{:.0f}"}))
     st.dataframe(sty, width="stretch", hide_index=True, height=38 * (len(rows) + 1))
-    st.caption("打分档:强多>50 / 偏多20~50 / 中性±20 / 偏空-50~-20 / 强空<-50。"
-               "筹码桶(估算)+ 大盘环境 + 盈亏比闸门已接;持仓/确认 P5。仅为信号上下文,非买卖指令。")
+    st.caption("自选股据 config.yaml;打分档:强多>50/偏多20~50/中性±20/偏空-50~-20/强空<-50。"
+               "仅为信号上下文,非买卖指令。要看全市场→切「全市场排行」或在「单股详情」搜任意股。")
 
-# ============================================================ 单股详情
+# ============================================================ 全市场排行
+elif view == "🔥 全市场排行":
+    st.subheader("🔥 全市场排行(两阶漏斗扫描)")
+    c1, c2 = st.columns([1, 1])
+    topn = c1.slider("精算候选数", 10, 50, 20, 5)
+    short = c2.toggle("看强空垫底(默认强多榜首)")
+    uni_n = len(get_universe_labels(cache_max))
+    key = f"scr_{cache_max}_{topn}_{short}"
+    go = st.button(f"▶ 运行全市场扫描({uni_n} 只,约 2–3 分钟)")
+    if go or key in st.session_state:
+        if key not in st.session_state:
+            with st.spinner("全市场扫描中…一阶粗筛(~2分钟)+ 二阶精算到最新…"):
+                st.session_state[key] = run_market_screen(cfg, end, regime, topn, short)
+        top = st.session_state[key]
+        rows = [{"代码": r["code"], "名称": r["name"], "现价": round(r["close"], 2),
+                 "涨跌%": round(r["pct"], 2), "综合分": r["score"]["total"], "档": r["score"]["band"],
+                 "周线": WT_CN.get(r["last"].get("weekly_trend"), "—"),
+                 "持仓": pos_label(r.get("pos")), "信号": sig_text(r["sig"])} for r in top]
+        dff = pd.DataFrame(rows)
+        sty = (dff.style.map(color_pct, subset=["涨跌%", "综合分"])
+               .format({"现价": "{:.2f}", "涨跌%": "{:+.2f}", "综合分": "{:+.1f}"}))
+        st.dataframe(sty, width="stretch", hide_index=True, height=38 * (len(rows) + 1))
+        st.caption(f"数据截至 {cache_max};全市场不过滤(含 ST/次新)。一阶缓存粗筛→二阶精算重排。"
+                   "结果已缓存,切走再回不必重跑。")
+    else:
+        st.info(f"点上方按钮扫描全市场 {uni_n} 只(一阶秒级粗筛 + 二阶 top-N 精算)。"
+                "首次约 2–3 分钟,之后缓存。命令行等价:`py run.py screen`。")
+
+# ============================================================ 单股详情(全市场可搜)
 else:
-    label = {r["code"]: f"{r['code']} {r['name']}" for r in results}
-    pick = st.sidebar.selectbox("选择个股", [r["code"] for r in results],
-                                format_func=lambda c: label.get(c, c))
-    r = next((x for x in results if x["code"] == pick), None)
+    uni = get_universe_labels(cache_max)
+    ucodes = [c for c, _ in uni]
+    ulabel = dict(uni)
+    default_i = ucodes.index(codes[0]) if (codes and codes[0] in ucodes) else 0
+    pick = st.sidebar.selectbox("选择个股(全市场,可输代码/名搜索)", ucodes, index=default_i,
+                                format_func=lambda c: ulabel.get(c, c))
+    r = analyze(pick, cfg, end, regime=regime)
     if r is None:
         st.warning("无数据"); st.stop()
     edf, last, s, sg = r["edf"], r["last"], r["score"], r["sig"]
