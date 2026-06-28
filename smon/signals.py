@@ -108,7 +108,7 @@ def evaluate(edf: pd.DataFrame, cfg, market_regime=None, chips=None, sector=None
 
     # S3 红色:任意 ≥1 → 清仓/留底仓
     s3 = []
-    if g("atr_stop_triggered"):
+    if g("atr_stop_triggered") and not bool(prev.get("atr_stop_triggered")):  # 跌破当日(事件,非状态)
         s3.append("触及ATR吊灯止损")
     prior_low60 = edf["low"].iloc[-61:-1].min() if len(edf) > 61 else r["low"]
     if close < prior_low60:
