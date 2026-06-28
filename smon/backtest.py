@@ -71,8 +71,12 @@ def run(edf: pd.DataFrame, cfg) -> dict:
     if start_i is None or start_i >= n - 1:
         return {"trades": [], "metrics": _summarize([], None, ("", "")), "insufficient": True}
 
+    anchored = bool(bt.get("position_anchored_stop", True))
+    atr_n = float((cfg.thresholds or {}).get("atr_n", 3.0))
+    highs, closes, atrs = df["high"].values, df["close"].values, df["atr"].values
+
     pos = 0
-    e_px = e_date = e_reason = e_idx = None
+    e_px = e_date = e_reason = e_idx = peak = None
     trades = []
     for i in range(start_i, n - 1):                 # 到 n-1,保证 i+1 存在
         sig = signals.evaluate(df.iloc[:i + 1], cfg)
@@ -82,16 +86,25 @@ def run(edf: pd.DataFrame, cfg) -> dict:
             e_px = nxt_open * (1 + cm.buy_rate())
             e_date, e_idx = nxt_date, i + 1
             e_reason = f"{sig['buy_level']}:" + "/".join(sig["buy_rules"])
-            pos = 1
-        elif pos == 1 and sig["sell_level"] in exit_levels:
-            x_px = nxt_open * (1 - cm.sell_rate())
-            trades.append(dict(
-                entry_date=e_date.date().isoformat(), exit_date=nxt_date.date().isoformat(),
-                entry_px=round(e_px, 2), exit_px=round(x_px, 2),
-                ret=x_px / e_px - 1, hold_days=int(i + 1 - e_idx),
-                entry_reason=e_reason,
-                exit_reason=f"{sig['sell_level']}:" + "/".join(sig["sell_rules"])))
-            pos = 0
+            pos, peak = 1, e_px
+        elif pos == 1:
+            peak = max(peak, float(highs[i]))       # 持仓期最高价
+            sell = sig["sell_level"]
+            # 持仓锚定吊灯止损:从持仓最高回落 N×ATR
+            stop_breach = (anchored and pd.notna(atrs[i])
+                           and closes[i] < peak - atr_n * float(atrs[i]))
+            # 趋势类离场(锚定模式下排除"仅全局ATR-S3",由持仓锚定接管)
+            only_atr = (sell == "S3" and sig["sell_rules"] == ["触及ATR吊灯止损"])
+            trend_exit = (sell in exit_levels) and not (anchored and only_atr)
+            if stop_breach or trend_exit:
+                x_px = nxt_open * (1 - cm.sell_rate())
+                reason = (f"{sell}:" + "/".join(sig["sell_rules"])) if trend_exit else "持仓ATR止损"
+                trades.append(dict(
+                    entry_date=e_date.date().isoformat(), exit_date=nxt_date.date().isoformat(),
+                    entry_px=round(e_px, 2), exit_px=round(x_px, 2),
+                    ret=x_px / e_px - 1, hold_days=int(i + 1 - e_idx),
+                    entry_reason=e_reason, exit_reason=reason))
+                pos, peak = 0, None
 
     if pos == 1:                                    # 期末未平仓 → 末日收盘 MTM
         last = df.iloc[-1]

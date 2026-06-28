@@ -70,6 +70,8 @@ backtest:
   exit_levels: ["S2", "S3"]        # 达到这些卖出级别就离场
   fill: next_open                  # 次日开盘成交(决策用收盘≤T,成交在T+1,无未来函数)
   oos_split: ""                    # 样本外切分日如 "2025-07-01";空=不切
+  position_anchored_stop: false    # 持仓锚定吊灯止损(可选)。中性40票A/B验证:对全局止损无改善
+                                   # (锚定+6% vs 全局+7%、回撤更大、B优A仅38%)→默认关,保留为开关
 costs:                             # A股真实成本(实盘前按券商校准)
   commission: 0.00025              # 佣金 双边(万2.5)
   min_commission: 5.0              # 最低佣金(rate模型暂不计,留待加资金/手数)
