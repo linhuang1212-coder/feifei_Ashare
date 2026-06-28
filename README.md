@@ -48,7 +48,8 @@ A股自选股技术指标**盘后**监测系统(实现《规则规范 v2.0》)�
 - [x] **P6 全市场扫描** —— sources.build_cache(daily_kline_v2→feifei.db 加 code+date 索引,~18s/440万行)+ list_universe(5526 只,不过滤)+ 两阶漏斗 `run.py screen`(一阶缓存秒级粗筛→二阶 top-N topup 到今天精算重排);local_db 读取优先走缓存,pos_pctile 改 rolling.rank 提速
 - [ ] P5b 信号确认(次日)+ 失败/冷静期状态机(state.py,需逐日持久化)
 - [ ] P2 量价细分 + ATR 吊灯止损精化 + 飞书告警
-- [ ] P3b 板块强弱(申万)+ 钝化检测调权 + 全市场扫描的批量补鲜/仪表盘排行标签
+- [x] **全市场批量补鲜** —— `run.py update`:tushare 按日批量补缓存到最新交易日(qfq 重锚,茅台交叉验证一致),全市场一阶也到今天
+- [ ] P3b 板块强弱(申万)+ 钝化检测调权 + 仪表盘"全市场排行"标签
 - [ ] P6 阈值校准 + 每日定时任务
 
 > 定位:**监测/提醒**(给人决策),非自动交易。回测=信号质量体检,不以跑赢大盘为目标。
@@ -58,14 +59,17 @@ A股自选股技术指标**盘后**监测系统(实现《规则规范 v2.0》)�
     "%PY%" run.py score                    # 全自选股打分排序 + 信号 + 大盘环境
     "%PY%" run.py check [代码]             # 指标达标清单(逐项 ✓/✗,自己过一遍)
     "%PY%" run.py backtest [代码]          # 事件驱动回测(信号质量体检)
-    "%PY%" run.py cache                    # 建/重建全市场缓存(首次或 daily_kline_v2 更新后)
+    "%PY%" run.py cache                    # 建/重建全市场缓存(首次,从 daily_kline_v2 到建库日)
+    "%PY%" run.py update                   # 全市场批量补鲜(tushare 按日补缓存到最新交易日)
     "%PY%" run.py screen --top 30          # 全市场两阶扫描选股(需先 cache);--short 取强空
     "%PY%" -m streamlit run app.py         # 仪表盘,浏览器开 http://localhost:8501
 
 ## 数据来源与新鲜度
 - 历史:只读 China_quant `daily_kline_v2`(全市场 ~5526 只,前复权,到建库日)。
 - 全市场提速:`cache` 把它复制进 `data/feifei.db` 并加 code+date 索引(local_db 读取自动优先用)。
-- 新鲜度:个股/自选/screen 二阶用 tushare(secrets.local.yaml 配 token)topup 到今天,失败回退 akshare。
+- 全市场新鲜度:`update` 用 tushare 按交易日批量(daily+adj_factor+daily_basic)把缓存补到最新交易日,
+  自算前复权并按缝合基准重锚(已对茅台等交叉验证,最新价=真实市价)。这样**全市场一阶**也到今天。
+- 个股新鲜度:自选/check/仪表盘/screen 二阶读缓存后再 topup,失败回退 akshare。
 - 密钥:`secrets.local.yaml`(已 gitignore)或环境变量 `TUSHARE_TOKEN`。
 
 ## 模块(规划)

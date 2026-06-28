@@ -85,6 +85,19 @@ def cache_ready(cfg) -> bool:
         return False
 
 
+def cache_max_date(cfg) -> str:
+    """缓存最新日期(供显示数据新鲜度)。"""
+    if not cache_ready(cfg):
+        return "—"
+    try:
+        con = sqlite3.connect(f"file:{_cache_path(cfg)}?mode=ro", uri=True)
+        d = con.execute("SELECT MAX(date) FROM kline_cache").fetchone()[0]
+        con.close()
+        return d or "—"
+    except Exception:
+        return "—"
+
+
 def _fetch_cache(code, start, end, cfg) -> pd.DataFrame | None:
     """从 feifei 缓存(code+date 索引)秒读单只;无缓存返回 None。"""
     if not cache_ready(cfg):
@@ -134,6 +147,90 @@ def build_cache(cfg, chunksize: int = 300000) -> int:
     out.commit()
     out.close()
     log.info(f"缓存完成:{total} 行 → {cache}")
+    return total
+
+
+def update_cache(cfg, log=None) -> int:
+    """全市场批量补鲜:用 tushare 按交易日一次取全市场(daily+adj_factor+daily_basic),
+    算前复权(锚定最后交易日=真实价),把已有缓存的除权股历史重锚后,追加缺口日。
+
+    qfq 锚定 last_day:gap 日 qfq = 不复权 × adj_factor[d] / adj_factor[last];
+    已有缓存(建库日基准,06-05收盘=真实)重锚到 last 基准:×k,k = adj_factor[06-05]/adj_factor[last]。
+    单元换算:tushare amount 千元→×1000 元;vol 手、turnover_rate %、pct_chg % 同库口径。
+    """
+    log = log or get_logger("cache")
+    cache = _cache_path(cfg)
+    if not cache_ready(cfg):
+        log.error("无缓存,请先 build_cache"); return 0
+    token = (cfg.tushare_token or os.environ.get("TUSHARE_TOKEN", "")).strip()
+    if not token:
+        log.error("无 tushare token,无法批量补鲜"); return 0
+    import tushare as ts
+    ts.set_token(token)
+    pro = ts.pro_api()
+
+    con = sqlite3.connect(cache)
+    cmax = con.execute("SELECT MAX(date) FROM kline_cache").fetchone()[0]
+    end = cfg.effective_end()
+    if cmax >= end:
+        log.info(f"缓存已到 {cmax},无需补鲜"); con.close(); return 0
+    cmax_c, end_c = cmax.replace("-", ""), end.replace("-", "")
+    cal = pro.trade_cal(exchange="SSE", start_date=cmax_c, end_date=end_c, is_open="1")
+    gap = sorted(d for d in cal["cal_date"].astype(str).tolist() if d > cmax_c)
+    if not gap:
+        log.info("无新交易日"); con.close(); return 0
+    last_day = gap[-1]
+    log.info(f"批量补鲜 {cmax} → {last_day}({len(gap)} 个交易日)…")
+
+    afL = pro.adj_factor(trade_date=last_day).set_index("ts_code")["adj_factor"]
+    af0 = pro.adj_factor(trade_date=cmax_c).set_index("ts_code")["adj_factor"]
+    # 1) 重锚已有缓存(建库日基准→last_day基准):除权股 ×k
+    common = af0.index.intersection(afL.index)
+    k = (af0[common] / afL[common]).replace([np.inf, -np.inf], np.nan).dropna()
+    div = k[(k - 1).abs() > 1e-6]
+    if len(div):
+        kmap = pd.DataFrame({"code": [c.split(".")[0].zfill(6) for c in div.index],
+                             "k": div.values}).groupby("code")["k"].first().reset_index()
+        con.execute("DROP TABLE IF EXISTS _div_k")
+        con.execute("CREATE TEMP TABLE _div_k(code TEXT PRIMARY KEY, k REAL)")
+        con.executemany("INSERT OR REPLACE INTO _div_k VALUES(?,?)",
+                        list(kmap.itertuples(index=False, name=None)))
+        con.execute("UPDATE kline_cache SET "
+                    "open=open*(SELECT k FROM _div_k d WHERE d.code=kline_cache.code), "
+                    "high=high*(SELECT k FROM _div_k d WHERE d.code=kline_cache.code), "
+                    "low=low*(SELECT k FROM _div_k d WHERE d.code=kline_cache.code), "
+                    "close=close*(SELECT k FROM _div_k d WHERE d.code=kline_cache.code), "
+                    "preclose=preclose*(SELECT k FROM _div_k d WHERE d.code=kline_cache.code) "
+                    "WHERE code IN (SELECT code FROM _div_k)")
+        con.commit()
+        log.info(f"重锚 {len(kmap)} 只除权股历史缓存(到 last_day 基准)")
+
+    # 2) 取缺口日 → qfq(last_day基准)→ 追加
+    total = 0
+    for d in gap:
+        daily = pro.daily(trade_date=d)
+        if daily is None or daily.empty:
+            continue
+        adj = pro.adj_factor(trade_date=d).set_index("ts_code")["adj_factor"]
+        basic = pro.daily_basic(trade_date=d, fields="ts_code,turnover_rate").set_index(
+            "ts_code")["turnover_rate"]
+        m = daily.set_index("ts_code")
+        fac = (adj.reindex(m.index) / afL.reindex(m.index)).fillna(1.0).values
+        out = pd.DataFrame({
+            "code": [c.split(".")[0].zfill(6) for c in m.index],
+            "date": f"{d[:4]}-{d[4:6]}-{d[6:]}",
+            "open": m["open"].values * fac, "high": m["high"].values * fac,
+            "low": m["low"].values * fac, "close": m["close"].values * fac,
+            "preclose": m["pre_close"].values * fac,
+            "volume": m["vol"].values, "amount": m["amount"].values * 1000.0,
+            "pct_chg": m["pct_chg"].values, "turnover": basic.reindex(m.index).values,
+        })
+        out.to_sql("kline_cache", con, if_exists="append", index=False)
+        total += len(out)
+        log.info(f"  补 {out['date'].iloc[0]}: {len(out)} 只")
+    con.commit()
+    con.close()
+    log.info(f"补鲜完成:新增 {total} 行,缓存到 {last_day}")
     return total
 
 

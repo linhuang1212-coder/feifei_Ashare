@@ -219,6 +219,15 @@ def cmd_cache(args) -> int:
     return 0 if n else 1
 
 
+def cmd_update(args) -> int:
+    """全市场批量补鲜:tushare 按交易日把缓存从建库日补到今天(qfq 重锚)。"""
+    cfg = load_config(args.config)
+    setup_logger(cfg.log_level, cfg.log_file)
+    n = sources.update_cache(cfg)
+    print(f"补鲜完成,新增 {n} 行。" if n else "无需补鲜(已最新)或失败,见日志。")
+    return 0
+
+
 def cmd_screen(args) -> int:
     """全市场两阶漏斗扫描:① 缓存秒级粗筛打分排序 → ② top-N topup 到今天精算。"""
     cfg = load_config(args.config)
@@ -228,9 +237,10 @@ def cmd_screen(args) -> int:
     if not sources.cache_ready(cfg):
         log.error("未建缓存,请先运行:py run.py cache"); return 1
     universe = sources.list_universe(cfg)
+    cache_max = sources.cache_max_date(cfg)
     reg = market.get_regime(cfg, end)
     regime = reg["regime"]
-    log.info(f"一阶全市场粗筛 {len(universe)} 只(本地缓存,无topup/筹码/周线)| 大盘 {regime}")
+    log.info(f"一阶全市场粗筛 {len(universe)} 只(本地缓存截至 {cache_max})| 大盘 {regime}")
 
     rows = []
     for i, code in enumerate(universe):
@@ -257,8 +267,8 @@ def cmd_screen(args) -> int:
     full.sort(key=lambda x: x["score"]["total"], reverse=not args.short)
     top = full[:args.top]
     title = "强空垫底" if args.short else "强多榜首"
-    print(f"\n全市场 {len(rows)} 只粗筛 | 大盘 {regime}({market.REGIME_CN.get(regime,'')})"
-          f" | {title} top {len(top)}(已按二阶精算分到今天排序):\n")
+    print(f"\n全市场 {len(rows)} 只粗筛(数据截至 {cache_max})| 大盘 {regime}"
+          f"({market.REGIME_CN.get(regime,'')}) | {title} top {len(top)}(按二阶精算分排序):\n")
     hdr = (_pad("代码", 8) + _pad("名称", 11) + _pad("现价", 9, True) + _pad("涨幅%", 8, True)
            + _pad("综合分", 8, True) + " " + _pad("档", 6) + "  信号")
     print(hdr); print("-" * 90)
@@ -275,7 +285,7 @@ def cmd_screen(args) -> int:
               + _pad(f"{r['close']:.2f}", 9, True) + _pad(f"{r['pct_chg']:+.2f}", 8, True)
               + _pad(f"{s['total']:+.1f}", 8, True) + " " + _pad(s["band"], 6) + "  "
               + (" ".join(sigtxt) if sigtxt else "—"))
-    print(f"\n注:一阶候选基于本地缓存(截至建库日~06-05)筛出,二阶已 topup 到今天并重排。"
+    print(f"\n注:数据截至 {cache_max}(跑 `update` 可批量补到最新交易日);二阶已按精算分重排。"
           f"全市场不过滤(含 ST/次新)。命中好票可加进 config.yaml 自选。")
     return 0
 
@@ -302,6 +312,8 @@ def main():
     ck.set_defaults(func=cmd_check)
     ca = sub.add_parser("cache", parents=[common], help="建/重建全市场缓存(code+date 索引)")
     ca.set_defaults(func=cmd_cache)
+    up = sub.add_parser("update", parents=[common], help="全市场批量补鲜(tushare 按日补到今天)")
+    up.set_defaults(func=cmd_update)
     sn = sub.add_parser("screen", parents=[common], help="全市场两阶漏斗扫描选股")
     sn.add_argument("--top", type=int, default=30, help="二阶精算的候选数(默认30)")
     sn.add_argument("--short", action="store_true", help="改取强空垫底(默认强多榜首)")
