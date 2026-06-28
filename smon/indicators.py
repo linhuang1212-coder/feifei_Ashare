@@ -20,22 +20,40 @@ def _clamp_series(s, lo, hi):
     return s.clip(lower=lo, upper=hi)
 
 
-def _divergence(price: pd.Series, ind: pd.Series, n: int, kind: str) -> pd.Series:
-    """背离的**因果**近似(辅助用):价格创 n 日新极值、而指标未同步创极值。
+def _swing_divergence(price: pd.Series, ind: pd.Series, k: int = 5,
+                      max_gap: int = 90, fresh: int = 20, kind: str = "top") -> pd.Series:
+    """**摆动点配对**背离(因果,正确版):比较最近两个价格摆动高/低点处的指标值。
 
-    top:    收盘创 n 日新高,但指标 < 其前 n 日最高 → 顶背离
-    bottom: 收盘创 n 日新低,但指标 > 其前 n 日最低 → 底背离
-    用 ≤t 数据,无未来泄漏;非精确摆动点配对,仅作预警/打分辅助(规范 2.2)。
+    顶背离: 价格后一个摆动高 > 前一个摆动高,但指标在后一个高点 < 前一个高点(动能背离)。
+    底背离: 价格后一个摆动低 < 前一个摆动低,但指标在后一个低点 > 前一个低点。
+    摆动点用 ±k 局部极值判定(于 j+k 确认,无未来泄漏);相邻去重(间隔≥k);
+    两高点跨度 ≤max_gap;摆动确认后 fresh 日内才点亮(避免陈旧)。
     """
-    if ind is None:
+    n = len(price)
+    if ind is None or n < 2 * k + 2:
         return pd.Series(False, index=price.index)
-    if kind == "top":
-        new_ext = price >= price.rolling(n).max()
-        ind_div = ind < ind.rolling(n).max().shift(1)
-    else:
-        new_ext = price <= price.rolling(n).min()
-        ind_div = ind > ind.rolling(n).min().shift(1)
-    return (new_ext & ind_div).fillna(False)
+    p = price.values.astype(float)
+    iv = ind.values.astype(float)
+    out = np.zeros(n, dtype=bool)
+    swings = []                                   # 确认的摆动极值索引(已去重)
+    for j in range(k, n - k):
+        seg = p[j - k:j + k + 1]
+        is_ext = (p[j] >= seg.max()) if kind == "top" else (p[j] <= seg.min())
+        if is_ext and (not swings or j - swings[-1] >= k):
+            swings.append(j)
+    confirmed, ci = [], 0
+    for t in range(n):
+        while ci < len(swings) and swings[ci] + k <= t:    # 确认日 ≤ t 才并入
+            confirmed.append(swings[ci]); ci += 1
+        if len(confirmed) >= 2:
+            p1, p2 = confirmed[-2], confirmed[-1]
+            if (p2 - p1 <= max_gap and (t - (p2 + k)) <= fresh
+                    and not np.isnan(iv[p1]) and not np.isnan(iv[p2])):
+                if kind == "top" and p[p2] > p[p1] and iv[p2] < iv[p1]:
+                    out[t] = True
+                elif kind == "bottom" and p[p2] < p[p1] and iv[p2] > iv[p1]:
+                    out[t] = True
+    return pd.Series(out, index=price.index)
 
 
 def enrich(df: pd.DataFrame, cfg, with_weekly: bool = True) -> pd.DataFrame:
@@ -160,10 +178,12 @@ def enrich(df: pd.DataFrame, cfg, with_weekly: bool = True) -> pd.DataFrame:
     df["price_up_vol_up"] = up_day & (vol > vol.shift(1))
     df["price_up_vol_down"] = up_day & (vol < vol.shift(1))
     df["price_down_vol_up"] = down_day & (vol > vol.shift(1))
-    # 放量滞涨(顶部嫌疑):放量 + 当日涨幅<2% + 收阴或长上影
+    # 放量滞涨(顶部嫌疑):放量 + 涨跌幅在 -3%~2% 之间(涨不动而非崩盘) + 收阴或长上影
+    # ⚠️ 必须排除放量大跌(那是"价跌量增/恐慌",不是滞涨)
     upper_shadow = high - np.maximum(openp, close)
     long_upper = upper_shadow > (high - low) * 0.5
-    df["vol_stagnant"] = df["vol_surge"] & (df["pct_chg"] < 2.0) & ((close < openp) | long_upper)
+    df["vol_stagnant"] = (df["vol_surge"] & (df["pct_chg"] < 2.0) & (df["pct_chg"] > -3.0)
+                          & ((close < openp) | long_upper))
     # 缩量回调(健康洗盘):阴跌 + 缩量
     df["vol_shrink_pullback"] = down_day & df["vol_shrink"]
 
@@ -179,10 +199,10 @@ def enrich(df: pd.DataFrame, cfg, with_weekly: bool = True) -> pd.DataFrame:
     df["pos_pctile"] = close.rolling(win).rank(pct=True, method="max") * 100
 
     # ---------------- 背离(因果近似,辅助) ----------------
-    df["macd_top_divergence"] = _divergence(close, dif, 40, "top")
-    df["macd_bottom_divergence"] = _divergence(close, dif, 40, "bottom")
-    df["rsi_top_divergence"] = _divergence(close, r14, 40, "top")
-    df["rsi_bottom_divergence"] = _divergence(close, r14, 40, "bottom")
+    df["macd_top_divergence"] = _swing_divergence(close, dif, kind="top")
+    df["macd_bottom_divergence"] = _swing_divergence(close, dif, kind="bottom")
+    df["rsi_top_divergence"] = _swing_divergence(close, r14, kind="top")
+    df["rsi_bottom_divergence"] = _swing_divergence(close, r14, kind="bottom")
 
     # ---------------- 日线钝化检测(v2.1 第7章 7.3) ----------------
     bd = getattr(cfg, "blunt_detection", {}) or {}

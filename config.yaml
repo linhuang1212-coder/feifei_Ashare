@@ -52,8 +52,8 @@ scoring_weights: { trend: 0.35, volume: 0.25, position: 0.20, chip: 0.20 }
 
 # ===== v2.0 =====
 market_filter:
-  index_codes: ["000001", "399006"]   # 上证 + 创业板(本地无→akshare取);从严合成:任一防守即防守
-  risk_off_action: pause_buy
+  index_codes: ["000001", "399001", "399006", "000688"]   # 上证/深证成指/创业板指/科创50(akshare取)
+  risk_off_action: pause_buy                               # 从严合成:任一指数防守即整体防守
 take_profit:
   min_risk_reward: 1.5             # 盈亏比低于此值的买入信号丢弃
   trailing_drawdown_tech: 0.18     # 科技股移动止盈回撤
