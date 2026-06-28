@@ -12,7 +12,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from smon import indicators, sources
+from smon import indicators, market, sources
 from smon import score as scoremod
 from smon import signals as sigmod
 from smon.config import load_config
@@ -37,7 +37,12 @@ def get_edf(code, end):
     return indicators.enrich(df, cfg)
 
 
-def analyze(code, cfg, end):
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_regime(end):
+    return market.get_regime(get_cfg(), end)
+
+
+def analyze(code, cfg, end, regime=None):
     edf = get_edf(code, end)
     if edf is None:
         return None
@@ -48,8 +53,8 @@ def analyze(code, cfg, end):
         "name": s.name if s else "",
         "edf": edf, "last": last,
         "close": float(last["close"]), "pct": float(last["pct_chg"]),
-        "score": scoremod.score_stock(edf, cfg),
-        "sig": sigmod.evaluate(edf, cfg),
+        "score": scoremod.score_stock(edf, cfg, market_regime=regime),
+        "sig": sigmod.evaluate(edf, cfg, market_regime=regime),
     }
 
 
@@ -85,15 +90,32 @@ if st.sidebar.button("🔄 刷新数据(清缓存)"):
     st.rerun()
 st.sidebar.info("定位:监测/提醒,给人决策用,非自动交易。所有信号有滞后与失效可能,风险自负。")
 
+# 大盘环境(全局,先算)
+reg = get_regime(end)
+regime = reg["regime"]
+
 # 预加载全部(带进度)
 results = []
 prog = st.sidebar.progress(0.0, text="加载中…")
 for i, c in enumerate(codes):
-    r = analyze(c, cfg, end)
+    r = analyze(c, cfg, end, regime=regime)
     if r:
         results.append(r)
     prog.progress((i + 1) / len(codes), text=f"加载 {c}")
 prog.empty()
+
+# 环境区横幅(规范 6.4:常驻顶部)
+reg_color = {"RISK_ON": UP, "NEUTRAL": FLAT, "RISK_OFF": DOWN}.get(regime, FLAT)
+idx_txt = " · ".join(f"{c} {market.REGIME_CN.get(s['regime'],'')}({s['pct_chg']:+.2f}%)"
+                     for c, s in reg.get("indices", {}).items())
+st.markdown(
+    f"#### 🌐 大盘环境:<span style='color:{reg_color}'>**{regime} "
+    f"{market.REGIME_CN.get(regime,'')}**</span>　<small style='color:#888'>{idx_txt}</small>",
+    unsafe_allow_html=True)
+if regime == "RISK_OFF":
+    st.error("大盘走弱:买入信号已暂停,卖出信号升级。")
+elif regime == "NEUTRAL":
+    st.caption("大盘中性:买入信号降一级,谨慎。")
 
 # ============================================================ 总览
 if view == "📊 总览":
@@ -210,6 +232,25 @@ else:
     fig.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10),
                       xaxis_rangeslider_visible=False, legend=dict(orientation="h"))
     st.plotly_chart(fig, width="stretch")
+
+    # 指标达标清单(规范 0.1:输出哪些条件满足,供逐项核对)
+    st.markdown("**📋 指标达标清单**(✅满足 / ⬜未满足 / ▸数值)")
+    groups = sigmod.feature_status(edf)
+    cols = st.columns(3)
+    for idx, (gname, items) in enumerate(groups):
+        with cols[idx % 3]:
+            lines = [f"**{gname}**"]
+            for name, status, note in items:
+                if isinstance(status, bool):
+                    txt = f"{'✅' if status else '⬜'} {name}"
+                    if status and note:
+                        txt += f" <small style='color:#888'>· {note}</small>"
+                else:
+                    txt = f"▸ {name}:**{status}**"
+                    if note:
+                        txt += f" <small style='color:#888'>· {note}</small>"
+                lines.append(txt)
+            st.markdown("  \n".join(lines), unsafe_allow_html=True)
 
     # 评分构成
     with st.expander("综合分构成与理由"):

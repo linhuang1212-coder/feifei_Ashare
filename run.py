@@ -11,7 +11,7 @@ import datetime as dt
 import math
 import sys
 
-from smon import backtest, indicators, score, signals, sources
+from smon import backtest, indicators, market, score, signals, sources
 from smon.config import load_config
 from smon.logsetup import get_logger, setup_logger
 
@@ -49,7 +49,7 @@ def cmd_fetch(args) -> int:
     return 0
 
 
-def _analyze(code, cfg, end):
+def _analyze(code, cfg, end, regime=None):
     """取数→指标→打分→信号,返回单只票结果(数据不足返回 None)。"""
     df = sources.fetch(code, cfg.start, end, source=cfg.data.source, cfg=cfg)
     if df.empty or len(df) < 30:
@@ -63,8 +63,8 @@ def _analyze(code, cfg, end):
         "date": last["date"].date().isoformat(),
         "close": round(float(last["close"]), 2),
         "pct_chg": round(float(last["pct_chg"]), 2),
-        "score": score.score_stock(edf, cfg),
-        "sig": signals.evaluate(edf, cfg),
+        "score": score.score_stock(edf, cfg, market_regime=regime),
+        "sig": signals.evaluate(edf, cfg, market_regime=regime),
     }
 
 
@@ -73,10 +73,14 @@ def cmd_score(args) -> int:
     setup_logger(cfg.log_level, cfg.log_file)
     log = get_logger("cli")
     end = cfg.effective_end()
+    reg = market.get_regime(cfg, end)
+    regime = reg["regime"]
+    print(f"\n大盘环境:{regime}({market.REGIME_CN.get(regime,'')})  " + "  ".join(
+        f"{c} {s['regime']}({s['pct_chg']:+.2f}%)" for c, s in reg.get("indices", {}).items()))
     codes = [args.code] if args.code else cfg.codes()
     rows = []
     for c in codes:
-        r = _analyze(c, cfg, end)
+        r = _analyze(c, cfg, end, regime=regime)
         if r:
             rows.append(r)
         else:
@@ -94,7 +98,9 @@ def cmd_score(args) -> int:
         s, sig = r["score"], r["sig"]
         sigtxt = []
         if sig["buy_level"]:
-            sigtxt.append(f"{sig['buy_level']}买[" + "/".join(sig["buy_rules"]) + "]")
+            rr = sig.get("risk_reward")
+            rrs = f" 盈亏比{rr:.1f}" if rr is not None else ""
+            sigtxt.append(f"{sig['buy_level']}买[" + "/".join(sig["buy_rules"]) + f"]{rrs}")
         if sig["sell_level"]:
             sigtxt.append(f"{sig['sell_level']}卖[" + "/".join(sig["sell_rules"]) + "]")
         print(_pad(r["code"], 8) + _pad(r["name"], 11)
@@ -104,7 +110,7 @@ def cmd_score(args) -> int:
               + _pad(f"{s['position']:+.0f}", 6, True) + "  "
               + (" | ".join(sigtxt) if sigtxt else "—"))
     print("\n打分档:强多>50 / 偏多20~50 / 中性±20 / 偏空-50~-20 / 强空<-50"
-          "(P1 筹码分未计→正负略压缩;大盘/止盈/确认在 P3+)")
+          "(筹码分 P4 未计;大盘环境已修正、盈亏比闸门已接;持仓/信号确认在 P5)")
     return 0
 
 
@@ -159,6 +165,39 @@ def cmd_backtest(args) -> int:
     return 0
 
 
+def cmd_check(args) -> int:
+    """打印每只股的指标达标清单(自己逐项过一遍)。"""
+    cfg = load_config(args.config)
+    setup_logger(cfg.log_level, cfg.log_file)
+    log = get_logger("cli")
+    end = cfg.effective_end()
+    codes = [args.code] if args.code else cfg.codes()
+    for c in codes:
+        df = sources.fetch(c, cfg.start, end, source=cfg.data.source, cfg=cfg)
+        if df.empty or len(df) < 30:
+            log.warning(f"{c}: 数据不足,跳过"); continue
+        edf = indicators.enrich(df, cfg)
+        last = edf.iloc[-1]
+        st = cfg.stock(c)
+        print("\n" + "=" * 60)
+        print(f"{c} {st.name if st else ''}  现价 {float(last['close']):.2f}  "
+              f"{float(last['pct_chg']):+.2f}%  ({last['date'].date()})")
+        print("=" * 60)
+        for gname, items in signals.feature_status(edf):
+            print(f"【{gname}】")
+            for name, status, note in items:
+                if isinstance(status, bool):
+                    line = f"  {'✓' if status else '·'} {name}"
+                    if note:
+                        line += f"  — {note}"
+                else:
+                    line = f"  ▸ {name}: {status}"
+                    if note:
+                        line += f"  ({note})"
+                print(line)
+    return 0
+
+
 def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--config", default="config.yaml")
@@ -176,6 +215,9 @@ def main():
     bt.add_argument("code", nargs="?", default="", help="指定单只;空=全部自选股")
     bt.add_argument("--trades", type=int, default=5, help="打印最近 N 笔交易(0=不打印)")
     bt.set_defaults(func=cmd_backtest)
+    ck = sub.add_parser("check", parents=[common], help="打印个股指标达标清单(逐项核对)")
+    ck.add_argument("code", nargs="?", default="", help="指定单只;空=全部自选股")
+    ck.set_defaults(func=cmd_check)
     args = p.parse_args()
     sys.exit(args.func(args))
 

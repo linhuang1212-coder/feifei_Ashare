@@ -23,8 +23,12 @@ def _band(total):
     return "强空"
 
 
-def score_stock(edf: pd.DataFrame, cfg) -> dict:
-    """对 enriched df 的最新一行打分。返回 total/band/四桶分/理由。"""
+def score_stock(edf: pd.DataFrame, cfg, market_regime=None) -> dict:
+    """对 enriched df 的最新一行打分。返回 total/band/四桶分/理由。
+
+    market_regime 传入时做整体修正(规范 10.2 v2.0):NEUTRAL 正分×0.8;
+    RISK_OFF 正分×0.5、负分×1.2(放大风险)。
+    """
     r = edf.iloc[-1]
 
     def g(k):
@@ -91,11 +95,18 @@ def score_stock(edf: pd.DataFrame, cfg) -> dict:
     w = cfg.scoring_weights or {}
     total = (trend * w.get("trend", 0.35) + vol * w.get("volume", 0.25)
              + pos * w.get("position", 0.20) + chip * w.get("chip", 0.20) + adj)
+    # 大盘环境整体修正(规范 10.2 v2.0)
+    if market_regime == "NEUTRAL":
+        if total > 0:
+            total *= 0.8
+    elif market_regime == "RISK_OFF":
+        total *= 0.5 if total > 0 else 1.2
     total = _clamp(total)
 
     return {
         "total": round(total, 1), "band": _band(total),
         "trend": round(trend, 1), "volume": round(vol, 1),
         "position": round(pos, 1), "chip": chip, "adj": adj,
+        "market_regime": market_regime,
         "reasons": {"trend": tr, "volume": vr, "position": pr, "adj": ar},
     }

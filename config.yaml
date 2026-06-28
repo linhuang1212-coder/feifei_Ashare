@@ -45,7 +45,7 @@ scoring_weights: { trend: 0.35, volume: 0.25, position: 0.20, chip: 0.20 }
 
 # ===== v2.0 =====
 market_filter:
-  index_codes: ["000300.SH"]       # 本地无上证000001/创业板399006;先用沪深300当大盘代理(P3定)
+  index_codes: ["000001", "399006"]   # 上证 + 创业板(本地无→akshare取);从严合成:任一防守即防守
   risk_off_action: pause_buy
 take_profit:
   min_risk_reward: 1.5             # 盈亏比低于此值的买入信号丢弃

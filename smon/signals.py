@@ -14,8 +14,8 @@ def _tier(v) -> str:
     return str(v) if v is not None and pd.notna(v) else ""
 
 
-def evaluate(edf: pd.DataFrame, cfg) -> dict:
-    """对 enriched df 评估当前买卖信号。"""
+def evaluate(edf: pd.DataFrame, cfg, market_regime=None) -> dict:
+    """对 enriched df 评估当前买卖信号(可传入大盘 regime 做环境过滤)。"""
     r = edf.iloc[-1]
     prev = edf.iloc[-2] if len(edf) > 1 else r
 
@@ -136,9 +136,103 @@ def evaluate(edf: pd.DataFrame, cfg) -> dict:
     elif s1:
         sell_level, sell_rules = "S1", s1
 
+    # ===== 盈亏比闸门(规范 8.1,买入前置)=====
+    rr = None
+    if buy_level:
+        cs = g("chandelier_stop")
+        risk = (close - cs) if (cs is not None and pd.notna(cs)) else None
+        prior_high60 = edf["high"].iloc[-61:-1].max() if len(edf) > 61 else r["high"]
+        if not risk or risk <= 0:
+            rr = 0.0
+        else:
+            resist = [x for x in [g("boll_up"), prior_high60] if pd.notna(x) and x > close]
+            reward = (min(resist) - close) if resist else risk * 99.0   # 无上方压力=晴空,给足
+            rr = round(reward / risk, 2)
+        th = float((getattr(cfg, "take_profit", {}) or {}).get("min_risk_reward", 1.5))
+        if rr < th:
+            buy_level, buy_rules = None, []                # 盈亏比不足直接丢弃
+        elif rr < 2:
+            buy_level = {"B3": "B2", "B2": "B1", "B1": None}.get(buy_level, buy_level)
+
+    # ===== 大盘环境过滤(规范 6.3,最高优先级)=====
+    if market_regime == "NEUTRAL":
+        buy_level = {"B3": "B2", "B2": "B1", "B1": None}.get(buy_level, buy_level)
+    elif market_regime == "RISK_OFF":
+        buy_level = None                                  # 大盘走弱暂停买入
+        sell_level = {"S1": "S2", "S2": "S3", "S3": "S3"}.get(sell_level, sell_level)
+
     return {
         "buy_level": buy_level, "buy_rules": buy_rules,
         "sell_level": sell_level, "sell_rules": sell_rules,
-        "pos_pctile": round(pp, 1),
+        "pos_pctile": round(pp, 1), "risk_reward": rr,
         "weekly_trend": wt, "decision_mode": decision_mode,
+        "market_regime": market_regime,
     }
+
+
+# ============================================================ 指标达标清单
+def feature_status(edf: pd.DataFrame) -> list:
+    """每只股的指标达标情况(规范 0.1:输出哪些条件满足),供人逐项核对。
+
+    返回 [(分组名, [(项, 状态, 备注)])];状态为 bool(✓/✗)或字符串值。
+    """
+    r = edf.iloc[-1]
+
+    def g(k):
+        return r.get(k)
+
+    close = r["close"]
+    ll = g("lifeline")
+
+    def above(x):
+        return bool(pd.notna(x) and close > x)
+
+    def fnum(k, fmt="{:.2f}"):
+        v = g(k)
+        return fmt.format(v) if pd.notna(v) else "—"
+
+    pp = g("pos_pctile")
+    wt_cn = {"WEEKLY_BULL": "多头", "WEEKLY_BEAR": "空头", "WEEKLY_NEUTRAL": "中性"}
+    return [
+        ("趋势", [
+            ("多头排列(MA5>10>20>60)", bool(g("ma_bull_aligned")), ""),
+            ("空头排列", bool(g("ma_bear_aligned")), ""),
+            ("站上生命线", above(ll), f"生命线 {fnum('lifeline')}"),
+            ("站上MA20", above(g("ma20")), f"MA20 {fnum('ma20')}"),
+            ("站上MA60", above(g("ma60")), f"MA60 {fnum('ma60')}"),
+            ("MACD零轴上方", bool(g("macd_above_zero")), f"DIF {fnum('dif')}"),
+            ("MACD金叉(当日)", bool(g("macd_golden_cross")), ""),
+            ("MACD死叉(当日)", bool(g("macd_dead_cross")), ""),
+        ]),
+        ("量能/换手", [
+            ("放量(>2×5日均量)", bool(g("vol_surge")), ""),
+            ("缩量(<0.7×)", bool(g("vol_shrink")), ""),
+            ("价涨量增", bool(g("price_up_vol_up")), ""),
+            ("放量滞涨(顶部嫌疑)", bool(g("vol_stagnant")), ""),
+            ("换手率档位", str(g("turnover_tier")), f"{fnum('turnover','{:.2f}')}%"),
+            ("换手骤升(>2.5×20日)", bool(g("turnover_spike")), ""),
+        ]),
+        ("位置", [
+            ("120日价格分位", (f"{float(pp):.0f}%" if pd.notna(pp) else "—"), ""),
+            ("近低位(<40%)", bool(pd.notna(pp) and float(pp) < 40), ""),
+            ("近高位(>80%)", bool(pd.notna(pp) and float(pp) > 80), ""),
+        ]),
+        ("震荡(仅辅助)", [
+            ("KDJ金叉", bool(g("kdj_golden_cross")),
+             f"K{fnum('kdj_k','{:.0f}')}/D{fnum('kdj_d','{:.0f}')}/J{fnum('kdj_j','{:.0f}')}"),
+            ("KDJ超卖", bool(g("kdj_oversold")), ""),
+            ("KDJ超买", bool(g("kdj_overbought")), ""),
+            ("RSI14>50", bool(g("rsi_above_50")), f"RSI {fnum('rsi14','{:.0f}')}"),
+            ("底背离(MACD/RSI)", bool(g("macd_bottom_divergence") or g("rsi_bottom_divergence")), ""),
+            ("顶背离(MACD/RSI)", bool(g("macd_top_divergence") or g("rsi_top_divergence")), ""),
+        ]),
+        ("止损/通道", [
+            ("ATR吊灯止损位", fnum("chandelier_stop"), "已触发⚠" if g("atr_stop_triggered") else ""),
+            ("布林站上中轨", bool(g("boll_above_mid")), ""),
+            ("布林收口(变盘前兆)", bool(g("boll_squeeze")), ""),
+            ("放量突破上轨", bool(g("boll_break_upper")), ""),
+        ]),
+        ("周线背景(v2.1)", [
+            ("周线趋势", wt_cn.get(g("weekly_trend"), "—"), f"周MA20 {fnum('w_ma20')}"),
+        ]),
+    ]
