@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from smon import chips as chipsmod
-from smon import indicators, market, sources
+from smon import indicators, market, sources, state
 from smon import position as posmod
 from smon import score as scoremod
 from smon import signals as sigmod
@@ -58,13 +58,17 @@ def analyze(code, cfg, end, regime=None):
     s = cfg.stock(code)
     ch = get_chips(code, end)
     sig = sigmod.evaluate(edf, cfg, market_regime=regime, chips=ch)
+    confirm = state.confirm_status(edf, cfg) if (sig.get("buy_level") or sig.get("sell_level")) else None
+    cooldown = state.cooldown_active(cfg, code, last["date"].date().isoformat())
+    if cooldown and sig.get("buy_level"):
+        sig["buy_level"], sig["buy_rules"] = None, []
     return {
         "code": str(code).split(".")[0].zfill(6),
         "name": s.name if s else "",
         "edf": edf, "last": last, "chips": ch,
         "close": float(last["close"]), "pct": float(last["pct_chg"]),
         "score": scoremod.score_stock(edf, cfg, market_regime=regime, chips=ch),
-        "sig": sig,
+        "sig": sig, "confirm": confirm, "cooldown": cooldown,
         "pos": posmod.annotate(s, edf, sig, cfg),
     }
 
@@ -193,6 +197,10 @@ else:
         if sg["sell_level"]:
             msgs.append(f"**🟢 {sg['sell_level']} 卖出** — " + " / ".join(sg["sell_rules"]))
         st.warning("　|　".join(msgs))
+    if r.get("confirm") == "PENDING":
+        st.caption("⏳ 信号待次日确认(尚未持续到第二日,稳健者勿急动)")
+    if r.get("cooldown"):
+        st.caption("❄ 该股处于止损冷静期,买入信号已抑制")
 
     # 持仓区(规范第9章:个性化"对你"的动作)
     pos = r.get("pos") or {}

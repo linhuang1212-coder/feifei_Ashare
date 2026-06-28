@@ -11,7 +11,7 @@ import datetime as dt
 import math
 import sys
 
-from smon import backtest, chips, indicators, market, position, score, signals, sources
+from smon import backtest, chips, indicators, market, position, score, signals, sources, state
 from smon.config import load_config
 from smon.logsetup import get_logger, setup_logger
 
@@ -59,6 +59,10 @@ def _analyze(code, cfg, end, regime=None):
     last = edf.iloc[-1]
     st = cfg.stock(code)
     sig = signals.evaluate(edf, cfg, market_regime=regime, chips=ch)
+    confirm = state.confirm_status(edf, cfg) if (sig.get("buy_level") or sig.get("sell_level")) else None
+    cooldown = state.cooldown_active(cfg, code, last["date"].date().isoformat())
+    if cooldown and sig.get("buy_level"):           # 止损冷静期抑制买入(规范9.3)
+        sig["buy_level"], sig["buy_rules"] = None, []
     return {
         "code": str(code).split(".")[0].zfill(6),
         "name": (st.name if st and st.name else sources.name_of(code, cfg)),
@@ -66,7 +70,7 @@ def _analyze(code, cfg, end, regime=None):
         "close": round(float(last["close"]), 2),
         "pct_chg": round(float(last["pct_chg"]), 2),
         "score": score.score_stock(edf, cfg, market_regime=regime, chips=ch),
-        "sig": sig,
+        "sig": sig, "confirm": confirm, "cooldown": cooldown,
         "pos": position.annotate(st, edf, sig, cfg),
     }
 
@@ -106,6 +110,10 @@ def cmd_score(args) -> int:
             sigtxt.append(f"{sig['buy_level']}买[" + "/".join(sig["buy_rules"]) + f"]{rrs}")
         if sig["sell_level"]:
             sigtxt.append(f"{sig['sell_level']}卖[" + "/".join(sig["sell_rules"]) + "]")
+        if sigtxt and r.get("confirm") == "PENDING":
+            sigtxt.append("⏳待确认")
+        if r.get("cooldown"):
+            sigtxt.append("❄冷静期(买入抑制)")
         print(_pad(r["code"], 8) + _pad(r["name"], 11)
               + _pad(f"{r['close']:.2f}", 9, True) + _pad(f"{r['pct_chg']:+.2f}", 8, True)
               + _pad(f"{s['total']:+.1f}", 8, True) + " " + _pad(s["band"], 6)
@@ -118,8 +126,9 @@ def cmd_score(args) -> int:
             pnls = "" if pnl is None else (f" 浮盈+{pnl:.1f}%" if pnl >= 0 else f" 浮亏{pnl:.1f}%")
             tp = f" [{pos['tp_level']}]" if pos.get("tp_level") else ""
             print(f"        └ 你({pos['position_status']}{pnls}){tp}:{pos.get('action_for_you','')}")
+    state.log_signals(cfg, rows, run_date=rows[0]["date"])   # 持久化当日信号(幂等去重)
     print("\n打分档:强多>50 / 偏多20~50 / 中性±20 / 偏空-50~-20 / 强空<-50"
-          "(筹码桶已接[估算]、大盘环境已修正、盈亏比闸门已接;持仓个性化已接;信号确认 P5b)")
+          "(筹码/大盘/盈亏比/持仓/次日确认/冷静期 均已接;⏳=待次日确认,❄=止损冷静期)")
     return 0
 
 

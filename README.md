@@ -46,7 +46,7 @@ A股自选股技术指标**盘后**监测系统(实现《规则规范 v2.0》)�
 - [x] **P4 筹码分布** —— chips.py(三角分布+换手衰减,因果)→ 获利盘/成本/集中度/筹码峰 + 打分筹码桶 + CAPITAL 动向 + 仪表盘筹码区&分布图
 - [x] **P5a 持仓感知 + 止盈** —— position.py:持仓盈亏/个性化动作(空仓看买、持有看卖止盈)+ 移动止盈/effective_exit + TP1/2/3 分级;CLI/仪表盘持仓区
 - [x] **P6 全市场扫描** —— sources.build_cache(daily_kline_v2→feifei.db 加 code+date 索引,~18s/440万行)+ list_universe(5526 只,不过滤)+ 两阶漏斗 `run.py screen`(一阶缓存秒级粗筛→二阶 top-N topup 到今天精算重排);local_db 读取优先走缓存,pos_pctile 改 rolling.rank 提速
-- [ ] P5b 信号确认(次日)+ 失败/冷静期状态机(state.py,需逐日持久化)
+- [x] **P5b 信号确认 + 状态机** —— state.py:次日确认(PENDING/CONFIRMED,信号需持续到次日)+ signal_log 持久化/去重 + 止损冷静期(抑制买入);CLI/仪表盘显示 ⏳待确认 ❄冷静期(失败计数/卖出后收复留后续)
 - [ ] P2 量价细分 + ATR 吊灯止损精化 + 飞书告警
 - [x] **全市场批量补鲜** —— `run.py update`:tushare 按日批量补缓存到最新交易日(qfq 重锚,茅台交叉验证一致),全市场一阶也到今天
 - [ ] P3b 板块强弱(申万)+ 钝化检测调权 + 仪表盘"全市场排行"标签
