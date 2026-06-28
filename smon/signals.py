@@ -110,6 +110,24 @@ def evaluate(edf: pd.DataFrame, cfg) -> dict:
     if g("vol_surge") and broke_ll and close < prevclose and upsh > body * 2:
         s3.append("天量长上影+破生命线")
 
+    # ===== v2.1 周线背景 + 钝化趋势主导(P3.5,规范第7章 7.4) =====
+    mp = getattr(cfg, "multi_period", {}) or {}
+    wt = r.get("weekly_trend", "WEEKLY_NEUTRAL")
+    decision_mode = "NORMAL"
+    if mp.get("enable"):
+        if wt == "WEEKLY_BEAR":
+            # 中期方向向下:清仓级 + 买入逆势降一级(7.4 / 7.4背景过滤表)
+            decision_mode = "TREND_LED"
+            s3 = s3 + ["周线转空(中期方向向下)"]
+            buy_level = {"B3": "B2", "B2": "B1", "B1": None}.get(buy_level, buy_level)
+            if buy_level:
+                buy_rules = buy_rules + ["⚠逆周线大势已降级"]
+        elif (mp.get("weekly_gate_exits") and wt == "WEEKLY_BULL"
+              and pd.notna(ll) and close > ll):
+            # 周线多头且站上生命线:日线 ATR 止损此刻是噪音,忽略(7.4:超买是强势,继续持有)
+            decision_mode = "TREND_LED"
+            s3 = [x for x in s3 if "ATR" not in x]
+
     sell_level, sell_rules = None, []
     if s3:
         sell_level, sell_rules = "S3", s3
@@ -122,4 +140,5 @@ def evaluate(edf: pd.DataFrame, cfg) -> dict:
         "buy_level": buy_level, "buy_rules": buy_rules,
         "sell_level": sell_level, "sell_rules": sell_rules,
         "pos_pctile": round(pp, 1),
+        "weekly_trend": wt, "decision_mode": decision_mode,
     }

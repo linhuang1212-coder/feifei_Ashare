@@ -74,6 +74,21 @@ costs:                             # A股真实成本(实盘前按券商校准)
   transfer_fee: 0.00001            # 过户费 双边
   slippage: 0.0005                 # 滑点 单边
 
+# ===== v2.1 多周期 + 钝化调权(P3.5) =====
+# 验证结论(2026-06-28,中性40票A/B回测):周线门控(enable)使收益变差(B+5% vs A+22%,
+# B优于A仅42%),证伪→默认关闭门控。周线背景仍由 enrich 常驻计算供仪表盘显示(不受此开关影响)。
+multi_period:
+  enable: false                    # 信号侧周线门控:经回测证伪,关闭(周线背景显示不受影响)
+  weekly_ma: [5, 10, 20, 30]       # 周线均线,MA20/30 为中期牛熊线
+  weekly_gate_exits: true          # (仅 enable=true 时生效)周线多头站上生命线忽略ATR止损
+blunt_detection:                   # 日线钝化检测(暂存配置,P3.5 第二步接入)
+  enable: true
+  kdj_blunt_days: 6
+  kdj_blunt_j_high: 90
+  kdj_blunt_j_low: 10
+  rsi_blunt_high: 80
+  rsi_blunt_low: 20
+
 output:
   db_path: data/feifei.db
   fig_dir: out

@@ -9,6 +9,8 @@
 import numpy as np
 import pandas as pd
 
+from . import weekly
+
 
 def _ema(s: pd.Series, span: int) -> pd.Series:
     return s.ewm(span=span, adjust=False).mean()
@@ -176,5 +178,8 @@ def enrich(df: pd.DataFrame, cfg) -> pd.DataFrame:
     df["macd_bottom_divergence"] = _divergence(close, dif, 40, "bottom")
     df["rsi_top_divergence"] = _divergence(close, r14, 40, "top")
     df["rsi_bottom_divergence"] = _divergence(close, r14, 40, "bottom")
+
+    # ---------------- 多周期:周线背景(v2.1,因果合成,常驻) ----------------
+    df = weekly.add_weekly(df, cfg)
 
     return df
