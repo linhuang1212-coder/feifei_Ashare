@@ -66,13 +66,13 @@ def score_stock(edf: pd.DataFrame, cfg, market_regime=None, chips=None, sector=N
     if g("vol_surge") and r["close"] > r["preclose"]:
         vol += 20; vr.append("+20 放量上涨")
     if g("price_up_vol_down"):
-        vol -= 15; vr.append("-15 价涨量缩")
+        vol -= 8; vr.append("-8 价涨量缩")          # 软化:实测短期无空头边际(原-15)
     if g("vol_stagnant"):
-        vol -= 25; vr.append("-25 放量滞涨")
+        vol -= 25; vr.append("-25 放量滞涨")          # 实测 fwd-1.9%,强边际,保留
     if g("vol_shrink_pullback"):
         vol += 10; vr.append("+10 缩量回调(健康洗盘)")
     if g("price_down_vol_up"):
-        vol -= 20; vr.append("-20 价跌量增")
+        vol -= 10; vr.append("-10 价跌量增")          # 软化:实测短期偏均值回归(原-20)
     vol = _clamp(vol)
 
     # ---- 位置分(近120日分位:越低越高,0%→+40 ... 100%→-40 线性) ----
