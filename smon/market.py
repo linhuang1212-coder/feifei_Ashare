@@ -6,12 +6,16 @@
 market_regime 三档:RISK_ON(进攻)/ NEUTRAL(中性)/ RISK_OFF(防守)。
 多指数合成:任一 RISK_OFF → 整体 RISK_OFF;全部 RISK_ON → RISK_ON;否则 NEUTRAL(从严)。
 """
+import os
+import sqlite3
+
 import numpy as np
 import pandas as pd
 
 from .logsetup import get_logger
 
 _CACHE = {}
+_SECTOR_CACHE = {}
 
 
 def _akshare_symbol(code: str) -> str:
@@ -99,3 +103,66 @@ def get_regime(cfg, end: str) -> dict:
 
 
 REGIME_CN = {"RISK_ON": "进攻", "NEUTRAL": "中性", "RISK_OFF": "防守"}
+
+
+# ============================================================ 板块强弱(规范6.2,申万一级)
+def get_sectors(cfg) -> dict | None:
+    """各申万一级行业近20日(等权成员)涨幅 → 全市场排名分位。带缓存。
+
+    返回 {members: {code:行业名}, name2pct: {行业名:0-100分位}, sect_ret: {行业名:20日涨幅}}。
+    需 feifei 缓存(kline_cache)+ China_quant 的 sw_l1_member。
+    """
+    cache = getattr(cfg, "db_path", "") or ""
+    src = cfg.data.local_db_path
+    if not (cache and os.path.exists(cache) and os.path.exists(src)):
+        return None
+    try:
+        con = sqlite3.connect(f"file:{cache}?mode=ro", uri=True)
+        dates = [r[0] for r in con.execute(
+            "SELECT DISTINCT date FROM kline_cache ORDER BY date DESC LIMIT 21")]
+        if len(dates) < 21:
+            con.close(); return None
+        key = dates[0]
+        if key in _SECTOR_CACHE:
+            con.close(); return _SECTOR_CACHE[key]
+        d_now, d_20 = dates[0], dates[20]
+        rows = con.execute("SELECT code, date, close FROM kline_cache WHERE date IN (?,?)",
+                           (d_now, d_20)).fetchall()
+        con.close()
+        cs = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+        members = {str(c).zfill(6): n for c, n in cs.execute(
+            "SELECT code, l1_name FROM sw_l1_member WHERE out_date IS NULL")}
+        cs.close()
+    except Exception as e:
+        get_logger("market").warning(f"板块取数失败: {type(e).__name__}: {e}")
+        return None
+    px = {}
+    for code, date, close in rows:
+        px.setdefault(code, {})[date] = close
+    by_sect = {}
+    for code, dd in px.items():
+        name = members.get(str(code).zfill(6))
+        if name and d_now in dd and d_20 in dd and dd[d_20]:
+            by_sect.setdefault(name, []).append(dd[d_now] / dd[d_20] - 1)
+    sect_ret = {n: sum(v) / len(v) for n, v in by_sect.items() if v}
+    if not sect_ret:
+        return None
+    ranked = sorted(sect_ret.items(), key=lambda x: x[1])
+    m = len(ranked)
+    name2pct = {n: round((i + 1) / m * 100, 1) for i, (n, _) in enumerate(ranked)}
+    out = {"members": members, "name2pct": name2pct, "sect_ret": sect_ret}
+    _SECTOR_CACHE[dates[0]] = out
+    return out
+
+
+def sector_info(cfg, code) -> dict | None:
+    """个股所属申万行业的强弱(规范6.2):pct>70 强、<30 弱。"""
+    s = get_sectors(cfg)
+    if not s:
+        return None
+    name = s["members"].get(str(code).split(".")[0].zfill(6))
+    if not name or name not in s["name2pct"]:
+        return None
+    pct = s["name2pct"][name]
+    return {"name": name, "pct": pct, "strong": pct > 70, "weak": pct < 30,
+            "ret20": round(s["sect_ret"].get(name, 0) * 100, 1)}

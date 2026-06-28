@@ -57,7 +57,8 @@ def analyze(code, cfg, end, regime=None):
     last = edf.iloc[-1]
     s = cfg.stock(code)
     ch = get_chips(code, end)
-    sig = sigmod.evaluate(edf, cfg, market_regime=regime, chips=ch)
+    sec = market.sector_info(cfg, code)
+    sig = sigmod.evaluate(edf, cfg, market_regime=regime, chips=ch, sector=sec)
     confirm = state.confirm_status(edf, cfg) if (sig.get("buy_level") or sig.get("sell_level")) else None
     cooldown = state.cooldown_active(cfg, code, last["date"].date().isoformat())
     if cooldown and sig.get("buy_level"):
@@ -67,8 +68,8 @@ def analyze(code, cfg, end, regime=None):
         "name": (s.name if (s and s.name) else sources.name_of(code, cfg)),
         "edf": edf, "last": last, "chips": ch,
         "close": float(last["close"]), "pct": float(last["pct_chg"]),
-        "score": scoremod.score_stock(edf, cfg, market_regime=regime, chips=ch),
-        "sig": sig, "confirm": confirm, "cooldown": cooldown,
+        "score": scoremod.score_stock(edf, cfg, market_regime=regime, chips=ch, sector=sec),
+        "sig": sig, "confirm": confirm, "cooldown": cooldown, "sector": sec,
         "pos": posmod.annotate(s, edf, sig, cfg),
     }
 
@@ -236,6 +237,11 @@ else:
     c4.metric("120日位置分位", f"{sg['pos_pctile']:.0f}%")
     light = sig_text(sg)
     c5.metric("当前信号", light if light != "—" else "无")
+    sec = r.get("sector")
+    if sec:
+        tag = "强(风口)" if sec["strong"] else ("弱" if sec["weak"] else "中")
+        st.caption(f"所属板块:**{sec['name']}** · 近20日 {sec['ret20']:+.1f}% · "
+                   f"全市场分位 {sec['pct']:.0f}%({tag})")
 
     # 信号区
     if sg["buy_level"] or sg["sell_level"]:

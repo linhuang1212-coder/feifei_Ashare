@@ -58,7 +58,8 @@ def _analyze(code, cfg, end, regime=None):
     ch = chips.compute(edf, cfg)
     last = edf.iloc[-1]
     st = cfg.stock(code)
-    sig = signals.evaluate(edf, cfg, market_regime=regime, chips=ch)
+    sec = market.sector_info(cfg, code)
+    sig = signals.evaluate(edf, cfg, market_regime=regime, chips=ch, sector=sec)
     confirm = state.confirm_status(edf, cfg) if (sig.get("buy_level") or sig.get("sell_level")) else None
     cooldown = state.cooldown_active(cfg, code, last["date"].date().isoformat())
     if cooldown and sig.get("buy_level"):           # 止损冷静期抑制买入(规范9.3)
@@ -69,8 +70,8 @@ def _analyze(code, cfg, end, regime=None):
         "date": last["date"].date().isoformat(),
         "close": round(float(last["close"]), 2),
         "pct_chg": round(float(last["pct_chg"]), 2),
-        "score": score.score_stock(edf, cfg, market_regime=regime, chips=ch),
-        "sig": sig, "confirm": confirm, "cooldown": cooldown,
+        "score": score.score_stock(edf, cfg, market_regime=regime, chips=ch, sector=sec),
+        "sig": sig, "confirm": confirm, "cooldown": cooldown, "sector": sec,
         "pos": position.annotate(st, edf, sig, cfg),
     }
 

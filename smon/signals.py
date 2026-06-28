@@ -14,8 +14,8 @@ def _tier(v) -> str:
     return str(v) if v is not None and pd.notna(v) else ""
 
 
-def evaluate(edf: pd.DataFrame, cfg, market_regime=None, chips=None) -> dict:
-    """对 enriched df 评估当前买卖信号(可传入大盘 regime 与筹码 chips)。"""
+def evaluate(edf: pd.DataFrame, cfg, market_regime=None, chips=None, sector=None) -> dict:
+    """对 enriched df 评估当前买卖信号(可传入大盘 regime、筹码 chips、板块 sector)。"""
     r = edf.iloc[-1]
     prev = edf.iloc[-2] if len(edf) > 1 else r
 
@@ -169,6 +169,14 @@ def evaluate(edf: pd.DataFrame, cfg, market_regime=None, chips=None) -> dict:
         buy_level = None                                  # 大盘走弱暂停买入
         sell_level = {"S1": "S2", "S2": "S3", "S3": "S3"}.get(sell_level, sell_level)
 
+    # ===== 板块强弱修正(规范6.3,叠在大盘之后)=====
+    if sector:
+        if sector.get("strong"):                          # 板块在风口:买入恢复一级
+            buy_level = {"B1": "B2", "B2": "B3", "B3": "B3"}.get(buy_level, buy_level)
+        elif sector.get("weak"):                          # 板块走弱:买入抑制 + 卖出强化
+            buy_level = {"B3": "B2", "B2": "B1", "B1": None}.get(buy_level, buy_level)
+            sell_level = {"S1": "S2", "S2": "S3", "S3": "S3"}.get(sell_level, sell_level)
+
     # ===== 主力/筹码动向(规范 5.4,中性提示,无主力资金数据→用筹码+量价近似)=====
     capital = None
     if chips:
@@ -184,7 +192,7 @@ def evaluate(edf: pd.DataFrame, cfg, market_regime=None, chips=None) -> dict:
         "sell_level": sell_level, "sell_rules": sell_rules,
         "pos_pctile": round(pp, 1), "risk_reward": rr,
         "weekly_trend": wt, "decision_mode": decision_mode,
-        "market_regime": market_regime, "capital": capital,
+        "market_regime": market_regime, "capital": capital, "sector": sector,
     }
 
 
