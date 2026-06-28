@@ -61,7 +61,7 @@ def _analyze(code, cfg, end, regime=None):
     sig = signals.evaluate(edf, cfg, market_regime=regime, chips=ch)
     return {
         "code": str(code).split(".")[0].zfill(6),
-        "name": (st.name if st else ""),
+        "name": (st.name if st and st.name else sources.name_of(code, cfg)),
         "date": last["date"].date().isoformat(),
         "close": round(float(last["close"]), 2),
         "pct_chg": round(float(last["pct_chg"]), 2),
@@ -208,6 +208,78 @@ def cmd_check(args) -> int:
     return 0
 
 
+def cmd_cache(args) -> int:
+    """建/重建全市场缓存(daily_kline_v2 → feifei.db,code+date 索引)。"""
+    cfg = load_config(args.config)
+    setup_logger(cfg.log_level, cfg.log_file)
+    get_logger("cli").info("建全市场缓存中…")
+    n = sources.build_cache(cfg)
+    if n:
+        print(f"缓存完成:{n} 行;全市场 {len(sources.list_universe(cfg))} 只 → {cfg.db_path}")
+    return 0 if n else 1
+
+
+def cmd_screen(args) -> int:
+    """全市场两阶漏斗扫描:① 缓存秒级粗筛打分排序 → ② top-N topup 到今天精算。"""
+    cfg = load_config(args.config)
+    setup_logger(cfg.log_level, cfg.log_file)
+    log = get_logger("cli")
+    end = cfg.effective_end()
+    if not sources.cache_ready(cfg):
+        log.error("未建缓存,请先运行:py run.py cache"); return 1
+    universe = sources.list_universe(cfg)
+    reg = market.get_regime(cfg, end)
+    regime = reg["regime"]
+    log.info(f"一阶全市场粗筛 {len(universe)} 只(本地缓存,无topup/筹码/周线)| 大盘 {regime}")
+
+    rows = []
+    for i, code in enumerate(universe):
+        df = sources._fetch_cache(code, cfg.start, end, cfg)
+        if df is None or df.empty or len(df) < 60:
+            continue
+        edf = indicators.enrich(df, cfg, with_weekly=False)
+        sc = score.score_stock(edf, cfg, market_regime=regime)
+        last = edf.iloc[-1]
+        rows.append({"code": code, "total": sc["total"], "band": sc["band"],
+                     "close": float(last["close"]), "pct": float(last["pct_chg"])})
+        if (i + 1) % 800 == 0:
+            log.info(f"  一阶 {i + 1}/{len(universe)}…")
+    if not rows:
+        log.error("一阶无结果"); return 1
+    rows.sort(key=lambda x: x["total"], reverse=not args.short)
+    cand = rows[: max(args.top * 2, 40)]            # 一阶超采,留给二阶按精算分重排
+    log.info(f"二阶精算 {len(cand)} 个候选(topup 到今天 + 筹码/信号)…")
+    full = []
+    for t in cand:
+        r = _analyze(t["code"], cfg, end, regime=regime)
+        if r:
+            full.append(r)
+    full.sort(key=lambda x: x["score"]["total"], reverse=not args.short)
+    top = full[:args.top]
+    title = "强空垫底" if args.short else "强多榜首"
+    print(f"\n全市场 {len(rows)} 只粗筛 | 大盘 {regime}({market.REGIME_CN.get(regime,'')})"
+          f" | {title} top {len(top)}(已按二阶精算分到今天排序):\n")
+    hdr = (_pad("代码", 8) + _pad("名称", 11) + _pad("现价", 9, True) + _pad("涨幅%", 8, True)
+           + _pad("综合分", 8, True) + " " + _pad("档", 6) + "  信号")
+    print(hdr); print("-" * 90)
+    for r in top:
+        s, sig = r["score"], r["sig"]
+        sigtxt = []
+        if sig["buy_level"]:
+            sigtxt.append(f"{sig['buy_level']}买")
+        if sig["sell_level"]:
+            sigtxt.append(f"{sig['sell_level']}卖")
+        if sig.get("capital"):
+            sigtxt.append(sig["capital"])
+        print(_pad(r["code"], 8) + _pad(r["name"] or "", 11)
+              + _pad(f"{r['close']:.2f}", 9, True) + _pad(f"{r['pct_chg']:+.2f}", 8, True)
+              + _pad(f"{s['total']:+.1f}", 8, True) + " " + _pad(s["band"], 6) + "  "
+              + (" ".join(sigtxt) if sigtxt else "—"))
+    print(f"\n注:一阶候选基于本地缓存(截至建库日~06-05)筛出,二阶已 topup 到今天并重排。"
+          f"全市场不过滤(含 ST/次新)。命中好票可加进 config.yaml 自选。")
+    return 0
+
+
 def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--config", default="config.yaml")
@@ -228,6 +300,12 @@ def main():
     ck = sub.add_parser("check", parents=[common], help="打印个股指标达标清单(逐项核对)")
     ck.add_argument("code", nargs="?", default="", help="指定单只;空=全部自选股")
     ck.set_defaults(func=cmd_check)
+    ca = sub.add_parser("cache", parents=[common], help="建/重建全市场缓存(code+date 索引)")
+    ca.set_defaults(func=cmd_cache)
+    sn = sub.add_parser("screen", parents=[common], help="全市场两阶漏斗扫描选股")
+    sn.add_argument("--top", type=int, default=30, help="二阶精算的候选数(默认30)")
+    sn.add_argument("--short", action="store_true", help="改取强空垫底(默认强多榜首)")
+    sn.set_defaults(func=cmd_screen)
     args = p.parse_args()
     sys.exit(args.func(args))
 

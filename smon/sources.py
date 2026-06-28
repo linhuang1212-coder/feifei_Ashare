@@ -14,6 +14,7 @@ daily_kline_v2 列名为正常 UTF-8 中文(日期/开盘/最高/最低/收盘/p
 """
 import os
 import sqlite3
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -64,10 +65,96 @@ def _ro_conn(path: str) -> sqlite3.Connection:
     return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
 
 
+# ---------------------------------------------------------------- 全市场缓存(code+date 索引)
+def _cache_path(cfg) -> str:
+    return getattr(cfg, "db_path", "") or ""
+
+
+def cache_ready(cfg) -> bool:
+    """feifei 缓存库存在且含 kline_cache 表。"""
+    p = _cache_path(cfg)
+    if not p or not os.path.exists(p):
+        return False
+    try:
+        con = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+        ok = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='kline_cache'").fetchone()
+        con.close()
+        return ok is not None
+    except Exception:
+        return False
+
+
+def _fetch_cache(code, start, end, cfg) -> pd.DataFrame | None:
+    """从 feifei 缓存(code+date 索引)秒读单只;无缓存返回 None。"""
+    if not cache_ready(cfg):
+        return None
+    try:
+        con = sqlite3.connect(f"file:{_cache_path(cfg)}?mode=ro", uri=True)
+        df = pd.read_sql(
+            "SELECT date,open,high,low,close,preclose,volume,amount,pct_chg,turnover "
+            "FROM kline_cache WHERE code=? AND date BETWEEN ? AND ? ORDER BY date",
+            con, params=[code6(code), start, end])
+        con.close()
+    except Exception as e:
+        get_logger("fetch").warning(f"缓存读取失败: {type(e).__name__}: {e}")
+        return None
+    if df.empty:
+        return _empty()
+    df["date"] = pd.to_datetime(df["date"])
+    return _ensure_cols(df)
+
+
+def build_cache(cfg, chunksize: int = 300000) -> int:
+    """把 China_quant daily_kline_v2 [cfg.start..建库日] 批量读进 feifei 缓存库,
+    加 (code,date) 索引,使全市场按 code 取数从慢扫变秒读。只读源库,绝不写。"""
+    log = get_logger("cache")
+    src = cfg.data.local_db_path
+    cache = _cache_path(cfg)
+    if not os.path.exists(src):
+        log.error(f"源库不存在: {src}"); return 0
+    Path(cache).parent.mkdir(parents=True, exist_ok=True)
+    out = sqlite3.connect(cache)
+    out.execute("DROP TABLE IF EXISTS kline_cache")
+    out.execute("CREATE TABLE kline_cache(code TEXT, date TEXT, open REAL, high REAL, "
+                "low REAL, close REAL, preclose REAL, volume REAL, amount REAL, "
+                "pct_chg REAL, turnover REAL)")
+    rocon = _ro_conn(src)
+    q = (f'SELECT code, "日期" date, "开盘" open, "最高" high, "最低" low, "收盘" close, '
+         f'"preclose" preclose, "成交量" volume, "成交额" amount, "涨跌幅" pct_chg, '
+         f'"换手率" turnover FROM "{cfg.data.local_db_table}" WHERE "日期" >= ?')
+    total = 0
+    for chunk in pd.read_sql(q, rocon, params=[cfg.start], chunksize=chunksize):
+        chunk.to_sql("kline_cache", out, if_exists="append", index=False)
+        total += len(chunk)
+        log.info(f"缓存写入 {total} 行…")
+    rocon.close()
+    log.info("建索引 (code,date)…")
+    out.execute("CREATE INDEX idx_cache_code_date ON kline_cache(code, date)")
+    out.commit()
+    out.close()
+    log.info(f"缓存完成:{total} 行 → {cache}")
+    return total
+
+
+def list_universe(cfg) -> list:
+    """全市场代码(来自缓存,按用户要求**不过滤** ST/北交所/次新)。无缓存退回自选。"""
+    if not cache_ready(cfg):
+        return cfg.codes()
+    con = sqlite3.connect(f"file:{_cache_path(cfg)}?mode=ro", uri=True)
+    codes = [r[0] for r in con.execute("SELECT DISTINCT code FROM kline_cache ORDER BY code")]
+    con.close()
+    return codes
+
+
 def _fetch_local_db(code, start, end, cfg) -> pd.DataFrame:
+    log = get_logger("fetch")
+    # 优先 feifei 缓存(code+date 索引,秒读);无则直读 daily_kline_v2(按 code 慢扫)
+    cdf = _fetch_cache(code, start, end, cfg)
+    if cdf is not None and not cdf.empty:
+        return cdf
     path = cfg.data.local_db_path
     table = cfg.data.local_db_table
-    log = get_logger("fetch")
     if not os.path.exists(path):
         log.warning(f"local_db 不存在: {path}")
         return _empty()
@@ -121,13 +208,42 @@ def _fetch_akshare(code, start, end) -> pd.DataFrame:
 
 
 def _fetch_remote(code, start, end, source, token) -> pd.DataFrame:
+    """补源:tushare(有 token)优先,失败/空则回退 akshare(免 token),保证稳健。"""
     src = (source or "akshare").lower()
-    if src == "tushare":
-        if not token:
-            get_logger("fetch").warning(f"{code}: topup_source=tushare 但无 token,改用 akshare")
-            return _fetch_akshare(code, start, end)
-        return _fetch_tushare(code, start, end, token)
+    if src == "tushare" and token:
+        try:
+            df = _fetch_tushare(code, start, end, token)
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            get_logger("fetch").warning(f"{code}: tushare 补失败转 akshare: {type(e).__name__}: {e}")
     return _fetch_akshare(code, start, end)
+
+
+# ---------------------------------------------------------------- 股票名(China_quant stock_list)
+_NAME_CACHE = None
+
+
+def load_names(cfg) -> dict:
+    global _NAME_CACHE
+    if _NAME_CACHE is not None:
+        return _NAME_CACHE
+    names = {}
+    path = cfg.data.local_db_path
+    if os.path.exists(path):
+        try:
+            con = _ro_conn(path)
+            names = {str(c).split(".")[0].zfill(6): n
+                     for c, n in con.execute("SELECT code, name FROM stock_list").fetchall()}
+            con.close()
+        except Exception:
+            names = {}
+    _NAME_CACHE = names
+    return names
+
+
+def name_of(code, cfg) -> str:
+    return load_names(cfg).get(code6(code), "")
 
 
 # ---------------------------------------------------------------- 缝合重锚

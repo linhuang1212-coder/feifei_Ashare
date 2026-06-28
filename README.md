@@ -45,9 +45,10 @@ A股自选股技术指标**盘后**监测系统(实现《规则规范 v2.0》)�
 - [x] **P3a 大盘环境过滤** —— market.py(akshare 取上证/创业板→RISK_ON/NEUTRAL/RISK_OFF)+ 信号升降级 + 打分修正 + 盈亏比闸门(rr<1.5 丢弃)
 - [x] **P4 筹码分布** —— chips.py(三角分布+换手衰减,因果)→ 获利盘/成本/集中度/筹码峰 + 打分筹码桶 + CAPITAL 动向 + 仪表盘筹码区&分布图
 - [x] **P5a 持仓感知 + 止盈** —— position.py:持仓盈亏/个性化动作(空仓看买、持有看卖止盈)+ 移动止盈/effective_exit + TP1/2/3 分级;CLI/仪表盘持仓区
+- [x] **P6 全市场扫描** —— sources.build_cache(daily_kline_v2→feifei.db 加 code+date 索引,~18s/440万行)+ list_universe(5526 只,不过滤)+ 两阶漏斗 `run.py screen`(一阶缓存秒级粗筛→二阶 top-N topup 到今天精算重排);local_db 读取优先走缓存,pos_pctile 改 rolling.rank 提速
 - [ ] P5b 信号确认(次日)+ 失败/冷静期状态机(state.py,需逐日持久化)
 - [ ] P2 量价细分 + ATR 吊灯止损精化 + 飞书告警
-- [ ] P3b 板块强弱(申万)+ 钝化检测调权
+- [ ] P3b 板块强弱(申万)+ 钝化检测调权 + 全市场扫描的批量补鲜/仪表盘排行标签
 - [ ] P6 阈值校准 + 每日定时任务
 
 > 定位:**监测/提醒**(给人决策),非自动交易。回测=信号质量体检,不以跑赢大盘为目标。
@@ -57,7 +58,15 @@ A股自选股技术指标**盘后**监测系统(实现《规则规范 v2.0》)�
     "%PY%" run.py score                    # 全自选股打分排序 + 信号 + 大盘环境
     "%PY%" run.py check [代码]             # 指标达标清单(逐项 ✓/✗,自己过一遍)
     "%PY%" run.py backtest [代码]          # 事件驱动回测(信号质量体检)
+    "%PY%" run.py cache                    # 建/重建全市场缓存(首次或 daily_kline_v2 更新后)
+    "%PY%" run.py screen --top 30          # 全市场两阶扫描选股(需先 cache);--short 取强空
     "%PY%" -m streamlit run app.py         # 仪表盘,浏览器开 http://localhost:8501
+
+## 数据来源与新鲜度
+- 历史:只读 China_quant `daily_kline_v2`(全市场 ~5526 只,前复权,到建库日)。
+- 全市场提速:`cache` 把它复制进 `data/feifei.db` 并加 code+date 索引(local_db 读取自动优先用)。
+- 新鲜度:个股/自选/screen 二阶用 tushare(secrets.local.yaml 配 token)topup 到今天,失败回退 akshare。
+- 密钥:`secrets.local.yaml`(已 gitignore)或环境变量 `TUSHARE_TOKEN`。
 
 ## 模块(规划)
 `smon/`:`config` 配置中心 · `logsetup` 日志 · `sources` 数据源(✅) · `indicators` 指标 ·

@@ -6,7 +6,7 @@ data:
   local_db_path: "C:\\Users\\Administrator\\China_quant\\data\\stock_data.db"
   local_db_table: daily_kline_v2
   topup: true                      # 本地库停在建库日(实测 2026-06-05),自动补到 end
-  topup_source: akshare            # 缺口补源: akshare(免token) | tushare
+  topup_source: tushare            # 缺口补源: tushare(已配token,前复权可靠) | akshare(免token回退)
   cache: true
 
 start: "2023-01-01"                # 至少留 250 交易日给 MA250 / 年内高低

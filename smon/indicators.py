@@ -38,8 +38,11 @@ def _divergence(price: pd.Series, ind: pd.Series, n: int, kind: str) -> pd.Serie
     return (new_ext & ind_div).fillna(False)
 
 
-def enrich(df: pd.DataFrame, cfg) -> pd.DataFrame:
-    """返回带全部指标列的 df(原列保留)。输入需含 sources.STD_COLS。"""
+def enrich(df: pd.DataFrame, cfg, with_weekly: bool = True) -> pd.DataFrame:
+    """返回带全部指标列的 df(原列保留)。输入需含 sources.STD_COLS。
+
+    with_weekly=False 跳过周线合成(全市场粗筛提速;打分不依赖周线)。
+    """
     p = cfg.periods or {}
     th = cfg.thresholds or {}
     df = df.sort_values("date").reset_index(drop=True).copy()
@@ -168,10 +171,9 @@ def enrich(df: pd.DataFrame, cfg) -> pd.DataFrame:
         labels=["low", "normal", "active", "high", "extreme"])
     df["turnover_spike"] = t > t.rolling(20).mean() * 2.5
 
-    # ---------------- 位置:近120日价格分位 ----------------
+    # ---------------- 位置:近120日价格分位(rolling.rank 向量化,因果) ----------------
     win = 120
-    df["pos_pctile"] = close.rolling(win).apply(
-        lambda x: float((x <= x[-1]).mean()) * 100, raw=True)
+    df["pos_pctile"] = close.rolling(win).rank(pct=True, method="max") * 100
 
     # ---------------- 背离(因果近似,辅助) ----------------
     df["macd_top_divergence"] = _divergence(close, dif, 40, "top")
@@ -180,6 +182,7 @@ def enrich(df: pd.DataFrame, cfg) -> pd.DataFrame:
     df["rsi_bottom_divergence"] = _divergence(close, r14, 40, "bottom")
 
     # ---------------- 多周期:周线背景(v2.1,因果合成,常驻) ----------------
-    df = weekly.add_weekly(df, cfg)
+    if with_weekly:
+        df = weekly.add_weekly(df, cfg)
 
     return df
