@@ -5,8 +5,10 @@ data:
   source: local_db                 # local_db(只读China_quant) | tushare | akshare
   local_db_path: "C:\\Users\\Administrator\\China_quant\\data\\stock_data.db"
   local_db_table: daily_kline_v2
-  topup: true                      # 本地库停在建库日(实测 2026-06-05),自动补到 end
-  topup_source: tushare            # 缺口补源: tushare(已配token,前复权可靠) | akshare(免token回退)
+  topup: false                     # 逐只补鲜:默认关(保鲜统一走 `run.py update` 批量补到最新交易日)。
+                                   # 关掉后看盘/打分/扫描零 tushare 调用(只读缓存);非交易日也不再空跑。
+                                   # 仅在"不想跑 update、想单独把某股补到今天"时临时设 true。
+  topup_source: tushare            # (topup=true 时)缺口补源: tushare | akshare
   cache: true
 
 start: "2023-01-01"                # 至少留 250 交易日给 MA250 / 年内高低
