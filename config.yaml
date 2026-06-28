@@ -14,10 +14,13 @@ end: ""                            # 空 = 到今天(用系统时钟)
 
 # 自选股(占位,待给真实名单)。position_status: EMPTY/HOLDING/WATCHING;
 # 持有时填 cost_price 以算盈亏(规范第 8 章)。
+# 持仓字段(规范第9章,以下 HOLDING/WATCHING 为**示例**,请改成你的真实持仓):
+#   position_status: HOLDING(持有)/ EMPTY(空仓)/ WATCHING(观察)
+#   持有时填 cost_price(成本价)、entry_date(建仓日,用于算持仓期最高→移动止盈)
 watchlist:
-  - { code: "601869", name: "长飞光纤" }
-  - { code: "600487", name: "亨通光电" }
-  - { code: "688146", name: "中船特气" }
+  - { code: "601869", name: "长飞光纤", position_status: HOLDING, cost_price: 400, entry_date: "2026-03-02" }
+  - { code: "600487", name: "亨通光电", position_status: HOLDING, cost_price: 120 }
+  - { code: "688146", name: "中船特气", position_status: WATCHING }
   - { code: "000636", name: "风华高科" }
   - { code: "688308", name: "欧科亿" }
   - { code: "603629", name: "利通电子" }

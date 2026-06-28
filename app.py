@@ -14,6 +14,7 @@ import streamlit as st
 
 from smon import chips as chipsmod
 from smon import indicators, market, sources
+from smon import position as posmod
 from smon import score as scoremod
 from smon import signals as sigmod
 from smon.config import load_config
@@ -56,13 +57,15 @@ def analyze(code, cfg, end, regime=None):
     last = edf.iloc[-1]
     s = cfg.stock(code)
     ch = get_chips(code, end)
+    sig = sigmod.evaluate(edf, cfg, market_regime=regime, chips=ch)
     return {
         "code": str(code).split(".")[0].zfill(6),
         "name": s.name if s else "",
         "edf": edf, "last": last, "chips": ch,
         "close": float(last["close"]), "pct": float(last["pct_chg"]),
         "score": scoremod.score_stock(edf, cfg, market_regime=regime, chips=ch),
-        "sig": sigmod.evaluate(edf, cfg, market_regime=regime, chips=ch),
+        "sig": sig,
+        "pos": posmod.annotate(s, edf, sig, cfg),
     }
 
 
@@ -84,6 +87,16 @@ def color_pct(v):
 
 
 WT_CN = {"WEEKLY_BULL": "周线多头", "WEEKLY_BEAR": "周线空头", "WEEKLY_NEUTRAL": "周线中性"}
+POS_CN = {"HOLDING": "持有", "EMPTY": "空仓", "WATCHING": "观察"}
+
+
+def pos_label(pos):
+    if not pos:
+        return "空仓"
+    s = pos.get("position_status", "EMPTY")
+    cn = POS_CN.get(s, s)
+    pnl = pos.get("your_pnl")
+    return f"{cn}{pnl:+.0f}%" if (s == "HOLDING" and pnl is not None) else cn
 
 
 # ============================================================ 侧边栏
@@ -128,7 +141,7 @@ elif regime == "NEUTRAL":
 # ============================================================ 总览
 if view == "📊 总览":
     st.subheader("📊 自选股总览(按综合分排序)")
-    st.caption("环境区:大盘 regime 待 P3 接入;周线背景已常驻(v2.1)。")
+    st.caption("已含:大盘环境(顶部)+ 周线背景 + 持仓盈亏。持仓列据 config.yaml 的持仓字段。")
     rows = []
     for r in sorted(results, key=lambda x: x["score"]["total"], reverse=True):
         s, sg = r["score"], r["sig"]
@@ -138,6 +151,7 @@ if view == "📊 总览":
             "趋势": s["trend"], "量能": s["volume"], "位置": s["position"],
             "周线背景": WT_CN.get(r["last"].get("weekly_trend"), "—"),
             "120日分位": round(r["sig"]["pos_pctile"], 0),
+            "持仓": pos_label(r.get("pos")),
             "信号": sig_text(sg),
         })
     df = pd.DataFrame(rows)
@@ -173,10 +187,28 @@ else:
     if sg["buy_level"] or sg["sell_level"]:
         msgs = []
         if sg["buy_level"]:
-            msgs.append(f"**🔴 {sg['buy_level']} 买入** — " + " / ".join(sg["buy_rules"]))
+            rr = sg.get("risk_reward")
+            rrs = f"(盈亏比{rr:.1f})" if rr is not None else ""
+            msgs.append(f"**🔴 {sg['buy_level']} 买入**{rrs} — " + " / ".join(sg["buy_rules"]))
         if sg["sell_level"]:
             msgs.append(f"**🟢 {sg['sell_level']} 卖出** — " + " / ".join(sg["sell_rules"]))
         st.warning("　|　".join(msgs))
+
+    # 持仓区(规范第9章:个性化"对你"的动作)
+    pos = r.get("pos") or {}
+    pstatus = pos.get("position_status", "EMPTY")
+    head = POS_CN.get(pstatus, pstatus)
+    if pstatus == "HOLDING" and pos.get("cost_price"):
+        head += f" · 成本 {pos['cost_price']:.2f}"
+    if pos.get("action_for_you"):
+        st.info(f"**👤 给你的动作({head}):** {pos['action_for_you']}")
+    if pstatus == "HOLDING":
+        h1, h2, h3, h4 = st.columns(4)
+        pnl = pos.get("your_pnl")
+        h1.metric("当前盈亏", f"{pnl:+.1f}%" if pnl is not None else "—")
+        h2.metric("移动止盈线", f"{pos['trailing_tp']:.2f}" if pos.get("trailing_tp") else "—")
+        h3.metric("实际离场线", f"{pos['effective_exit']:.2f}" if pos.get("effective_exit") else "—")
+        h4.metric("止盈分级", pos.get("tp_level") or "—")
 
     g1, g2, g3 = st.columns(3)
     with g1:

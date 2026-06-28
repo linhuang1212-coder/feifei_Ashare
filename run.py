@@ -11,7 +11,7 @@ import datetime as dt
 import math
 import sys
 
-from smon import backtest, chips, indicators, market, score, signals, sources
+from smon import backtest, chips, indicators, market, position, score, signals, sources
 from smon.config import load_config
 from smon.logsetup import get_logger, setup_logger
 
@@ -58,6 +58,7 @@ def _analyze(code, cfg, end, regime=None):
     ch = chips.compute(edf, cfg)
     last = edf.iloc[-1]
     st = cfg.stock(code)
+    sig = signals.evaluate(edf, cfg, market_regime=regime, chips=ch)
     return {
         "code": str(code).split(".")[0].zfill(6),
         "name": (st.name if st else ""),
@@ -65,7 +66,8 @@ def _analyze(code, cfg, end, regime=None):
         "close": round(float(last["close"]), 2),
         "pct_chg": round(float(last["pct_chg"]), 2),
         "score": score.score_stock(edf, cfg, market_regime=regime, chips=ch),
-        "sig": signals.evaluate(edf, cfg, market_regime=regime, chips=ch),
+        "sig": sig,
+        "pos": position.annotate(st, edf, sig, cfg),
     }
 
 
@@ -110,8 +112,14 @@ def cmd_score(args) -> int:
               + _pad(f"{s['trend']:+.0f}", 6, True) + _pad(f"{s['volume']:+.0f}", 6, True)
               + _pad(f"{s['position']:+.0f}", 6, True) + "  "
               + (" | ".join(sigtxt) if sigtxt else "—"))
+        pos = r.get("pos") or {}
+        if pos.get("position_status") and pos["position_status"] != "EMPTY":
+            pnl = pos.get("your_pnl")
+            pnls = "" if pnl is None else (f" 浮盈+{pnl:.1f}%" if pnl >= 0 else f" 浮亏{pnl:.1f}%")
+            tp = f" [{pos['tp_level']}]" if pos.get("tp_level") else ""
+            print(f"        └ 你({pos['position_status']}{pnls}){tp}:{pos.get('action_for_you','')}")
     print("\n打分档:强多>50 / 偏多20~50 / 中性±20 / 偏空-50~-20 / 强空<-50"
-          "(筹码桶已接[估算]、大盘环境已修正、盈亏比闸门已接;持仓/信号确认在 P5)")
+          "(筹码桶已接[估算]、大盘环境已修正、盈亏比闸门已接;持仓个性化已接;信号确认 P5b)")
     return 0
 
 
