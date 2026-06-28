@@ -3,7 +3,7 @@
 A股自选股技术指标**盘后**监测系统(实现《规则规范 v2.0》)。每交易日收盘后批算一次,
 对自选股产出 **信号提醒 / 打分排序 / 仪表盘** 三类输出。**不做盘中/实时。**
 
-> 📖 **怎么用看 [USAGE.md](USAGE.md)**(给使用者的操作手册)。完整设计/评审/分阶段见 [DESIGN.md](DESIGN.md)。
+> 📖 **怎么用看 [USAGE.md](USAGE.md)**;**别人本地部署看 [DEPLOY_LOCAL.md](DEPLOY_LOCAL.md)**(只需 Python+tushare token,不依赖 China_quant)。完整设计见 [DESIGN.md](DESIGN.md)。
 > 免责声明:本系统仅为技术指标的客观计算与提示,**不构成任何投资建议**;信号有滞后与失效可能,决策风险自负。
 
 ## 定位

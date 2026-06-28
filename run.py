@@ -220,11 +220,16 @@ def cmd_check(args) -> int:
 
 
 def cmd_cache(args) -> int:
-    """建/重建全市场缓存(daily_kline_v2 → feifei.db,code+date 索引)。"""
+    """建/重建全市场缓存。--from local=读 China_quant(你本机);--from tushare=纯 tushare 建(可移植)。"""
     cfg = load_config(args.config)
     setup_logger(cfg.log_level, cfg.log_file)
-    get_logger("cli").info("建全市场缓存中…")
-    n = sources.build_cache(cfg)
+    log = get_logger("cli")
+    if getattr(args, "from_", "local") == "tushare":
+        log.info("从 tushare 建全市场缓存(脱离 China_quant,供本地部署)…")
+        n = sources.build_cache_tushare(cfg)
+    else:
+        log.info("从 China_quant 本地库建全市场缓存…")
+        n = sources.build_cache(cfg)
     if n:
         print(f"缓存完成:{n} 行;全市场 {len(sources.list_universe(cfg))} 只 → {cfg.db_path}")
     return 0 if n else 1
@@ -338,6 +343,8 @@ def main():
     ck.add_argument("code", nargs="?", default="", help="指定单只;空=全部自选股")
     ck.set_defaults(func=cmd_check)
     ca = sub.add_parser("cache", parents=[common], help="建/重建全市场缓存(code+date 索引)")
+    ca.add_argument("--from", dest="from_", choices=["local", "tushare"], default="local",
+                    help="local=读 China_quant(本机) | tushare=纯 tushare 建(可移植,他人部署用)")
     ca.set_defaults(func=cmd_cache)
     up = sub.add_parser("update", parents=[common], help="全市场批量补鲜(tushare 按日补到今天)")
     up.set_defaults(func=cmd_update)

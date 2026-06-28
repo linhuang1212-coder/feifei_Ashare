@@ -106,6 +106,30 @@ REGIME_CN = {"RISK_ON": "进攻", "NEUTRAL": "中性", "RISK_OFF": "防守"}
 
 
 # ============================================================ 板块强弱(规范6.2,申万一级)
+def _load_sw_members(cfg) -> dict:
+    """code→申万一级行业:优先 China_quant sw_l1_member,无则读仓库自带 ref/sw_l1_member.csv。"""
+    src = cfg.data.local_db_path
+    if src and os.path.exists(src):
+        try:
+            con = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+            m = {str(c).split(".")[0].zfill(6): n for c, n in con.execute(
+                "SELECT code, l1_name FROM sw_l1_member WHERE out_date IS NULL")}
+            con.close()
+            if m:
+                return m
+        except Exception:
+            pass
+    import csv
+    path = os.path.join(getattr(cfg, "project_dir", "."), "ref", "sw_l1_member.csv")
+    m = {}
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if row.get("l1_name"):
+                    m[str(row["code"]).split(".")[0].zfill(6)] = row["l1_name"]
+    return m
+
+
 def get_sectors(cfg) -> dict | None:
     """各申万一级行业近20日(等权成员)涨幅 → 全市场排名分位。带缓存。
 
@@ -113,8 +137,7 @@ def get_sectors(cfg) -> dict | None:
     需 feifei 缓存(kline_cache)+ China_quant 的 sw_l1_member。
     """
     cache = getattr(cfg, "db_path", "") or ""
-    src = cfg.data.local_db_path
-    if not (cache and os.path.exists(cache) and os.path.exists(src)):
+    if not (cache and os.path.exists(cache)):     # 只需缓存;申万映射由 _load_sw_members(含CSV兜底)
         return None
     try:
         con = sqlite3.connect(f"file:{cache}?mode=ro", uri=True)
@@ -129,10 +152,9 @@ def get_sectors(cfg) -> dict | None:
         rows = con.execute("SELECT code, date, close FROM kline_cache WHERE date IN (?,?)",
                            (d_now, d_20)).fetchall()
         con.close()
-        cs = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
-        members = {str(c).zfill(6): n for c, n in cs.execute(
-            "SELECT code, l1_name FROM sw_l1_member WHERE out_date IS NULL")}
-        cs.close()
+        members = _load_sw_members(cfg)
+        if not members:
+            return None
     except Exception as e:
         get_logger("market").warning(f"板块取数失败: {type(e).__name__}: {e}")
         return None

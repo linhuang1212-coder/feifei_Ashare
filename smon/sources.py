@@ -150,6 +150,81 @@ def build_cache(cfg, chunksize: int = 300000) -> int:
     return total
 
 
+def build_cache_tushare(cfg, log=None) -> int:
+    """从 tushare 按交易日批量建**全市场前复权历史**缓存,完全脱离 China_quant(供他人本地部署)。
+
+    每个交易日 3 次批量调用(daily+adj_factor+daily_basic,各取全市场),约 cfg.start..今天
+    ~N 交易日 × 3 次。qfq 锚定**每只股自己的最新交易日**(latest_af):qfq=不复权×adj/anchor。
+    """
+    import time
+    log = log or get_logger("cache")
+    token = (cfg.tushare_token or os.environ.get("TUSHARE_TOKEN", "")).strip()
+    if not token:
+        log.error("无 tushare token,无法从 tushare 建库(secrets.local.yaml 或 env TUSHARE_TOKEN)")
+        return 0
+    import tushare as ts
+    ts.set_token(token)
+    pro = ts.pro_api()
+
+    def call(fn):
+        for i in range(5):
+            try:
+                return fn()
+            except Exception as ex:
+                if i < 4 and any(k in str(ex) for k in ("每分钟", "抱歉", "频繁", "limit", "rate")):
+                    log.warning(f"限频,等 12s 重试…")
+                    time.sleep(12)
+                    continue
+                raise
+
+    s_c, e_c = cfg.start.replace("-", ""), cfg.effective_end().replace("-", "")
+    cal = call(lambda: pro.trade_cal(exchange="SSE", start_date=s_c, end_date=e_c, is_open="1"))
+    days = sorted(cal["cal_date"].astype(str).tolist())
+    if not days:
+        log.error("无交易日"); return 0
+    log.info(f"从 tushare 建全市场历史 {days[0]}..{days[-1]}({len(days)} 交易日,约 {len(days)*3} 次调用,预计数分钟)…")
+    frames = []
+    for i, d in enumerate(days):
+        daily = call(lambda: pro.daily(trade_date=d))
+        if daily is None or daily.empty:
+            continue
+        adj = call(lambda: pro.adj_factor(trade_date=d)).set_index("ts_code")["adj_factor"]
+        basic = call(lambda: pro.daily_basic(trade_date=d, fields="ts_code,turnover_rate")
+                     ).set_index("ts_code")["turnover_rate"]
+        m = daily.set_index("ts_code")
+        frames.append(pd.DataFrame({
+            "code": [c.split(".")[0].zfill(6) for c in m.index],
+            "date": f"{d[:4]}-{d[4:6]}-{d[6:]}",
+            "open": m["open"].values, "high": m["high"].values, "low": m["low"].values,
+            "close": m["close"].values, "preclose": m["pre_close"].values,
+            "volume": m["vol"].values, "amount": m["amount"].values * 1000.0,
+            "pct_chg": m["pct_chg"].values, "turnover": basic.reindex(m.index).values,
+            "af": adj.reindex(m.index).values}))
+        if (i + 1) % 50 == 0:
+            log.info(f"  拉取 {i + 1}/{len(days)} 交易日…")
+    if not frames:
+        log.error("无数据"); return 0
+    big = pd.concat(frames, ignore_index=True).sort_values(["code", "date"])
+    anchor = big.groupby("code")["af"].last()                  # 每股最新交易日的复权因子
+    fac = (big["af"] / big["code"].map(anchor)).fillna(1.0)
+    for c in ("open", "high", "low", "close", "preclose"):
+        big[c] = big[c] * fac
+    cols = ["code", "date", "open", "high", "low", "close", "preclose",
+            "volume", "amount", "pct_chg", "turnover"]
+    cache = _cache_path(cfg)
+    Path(cache).parent.mkdir(parents=True, exist_ok=True)
+    out = sqlite3.connect(cache)
+    out.execute("DROP TABLE IF EXISTS kline_cache")
+    out.execute("CREATE TABLE kline_cache(code TEXT, date TEXT, open REAL, high REAL, low REAL, "
+                "close REAL, preclose REAL, volume REAL, amount REAL, pct_chg REAL, turnover REAL)")
+    big[cols].to_sql("kline_cache", out, if_exists="append", index=False, chunksize=100000)
+    out.execute("CREATE INDEX idx_cache_code_date ON kline_cache(code, date)")
+    out.commit()
+    out.close()
+    log.info(f"tushare 建库完成:{len(big)} 行 → {cache}")
+    return len(big)
+
+
 def update_cache(cfg, log=None) -> int:
     """全市场批量补鲜:用 tushare 按交易日一次取全市场(daily+adj_factor+daily_basic),
     算前复权(锚定最后交易日=真实价),把已有缓存的除权股历史重锚后,追加缺口日。
